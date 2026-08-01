@@ -525,4 +525,13 @@ window.desktop.onSaveBeforeClose(async () => {
   if (saved) window.desktop.closeAfterSave();
 });
 
+let externalOpenQueue = Promise.resolve();
+window.desktop.onOpenPath((document) => {
+  externalOpenQueue = externalOpenQueue.then(async () => {
+    if (!(await resolveReplacement())) return;
+    setContent(document.content, document.filePath, document.name);
+    showToast('文档已打开');
+  });
+});
+
 setContent(initialContent);

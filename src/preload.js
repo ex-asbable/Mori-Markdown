@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('desktop', {
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
   onSaveBeforeClose: (callback) => {
     ipcRenderer.on('document:save-before-close', callback);
+  },
+  onOpenPath: (callback) => {
+    ipcRenderer.on('document:open-path', (_event, document) => callback(document));
   }
 });
-

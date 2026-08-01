@@ -5,13 +5,59 @@ const path = require('node:path');
 let mainWindow;
 let isDirty = false;
 let isQuitting = false;
+let pendingDocumentPath = null;
+let lastOpenedDocumentPath = null;
+let rendererReady = false;
 
 const documentFilters = [
   { name: 'Markdown / TeX', extensions: ['md', 'markdown', 'mdown', 'mkd', 'tex', 'txt'] },
   { name: 'All files', extensions: ['*'] }
 ];
 
+async function findDocumentPath(argv, workingDirectory = process.cwd()) {
+  for (const argument of argv.slice(1)) {
+    if (!argument || argument.startsWith('-')) continue;
+
+    const candidate = path.resolve(workingDirectory, argument);
+    if (candidate === path.resolve(process.execPath)) continue;
+
+    try {
+      const stats = await fs.stat(candidate);
+      if (stats.isFile()) return candidate;
+    } catch {
+      // Electron and development launch arguments are not necessarily file paths.
+    }
+  }
+  return null;
+}
+
+async function readDocument(filePath) {
+  const content = await fs.readFile(filePath, 'utf8');
+  return { filePath, content, name: path.basename(filePath) };
+}
+
+async function openDocumentPath(filePath) {
+  if (!filePath) return;
+
+  if (!mainWindow || mainWindow.isDestroyed() || !rendererReady) {
+    pendingDocumentPath = filePath;
+    return;
+  }
+
+  try {
+    const document = await readDocument(filePath);
+    mainWindow.webContents.send('document:open-path', document);
+    lastOpenedDocumentPath = filePath;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  } catch (error) {
+    dialog.showErrorBox('无法打开文件', error.message);
+  }
+}
+
 function createWindow() {
+  rendererReady = false;
   mainWindow = new BrowserWindow({
     width: 1180,
     height: 780,
@@ -36,6 +82,13 @@ function createWindow() {
 
   mainWindow.setMenuBarVisibility(false);
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
+  mainWindow.webContents.once('did-finish-load', () => {
+    rendererReady = true;
+    if (!pendingDocumentPath) return;
+    const filePath = pendingDocumentPath;
+    pendingDocumentPath = null;
+    openDocumentPath(filePath);
+  });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
@@ -44,6 +97,21 @@ function createWindow() {
   mainWindow.once('ready-to-show', async () => {
     mainWindow.show();
     if (process.argv.includes('--smoke')) {
+      console.log(`Smoke argv: ${JSON.stringify(process.argv)}`);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (lastOpenedDocumentPath) {
+        const expectedContent = await fs.readFile(lastOpenedDocumentPath, 'utf8');
+        const actualContent = await mainWindow.webContents.executeJavaScript(
+          'document.querySelector(\'#editor\').value'
+        );
+        if (actualContent !== expectedContent) {
+          console.error(`Startup document was not displayed: ${lastOpenedDocumentPath}`);
+          isQuitting = true;
+          app.exit(1);
+          return;
+        }
+        console.log(`Smoke startup document: ${lastOpenedDocumentPath}`);
+      }
       const artifactsDirectory = path.join(__dirname, '..', 'artifacts');
       await fs.mkdir(artifactsDirectory, { recursive: true });
       await mainWindow.webContents.executeJavaScript(
@@ -196,9 +264,9 @@ ipcMain.handle('document:open', async () => {
 
   try {
     const filePath = result.filePaths[0];
-    const content = await fs.readFile(filePath, 'utf8');
+    const document = await readDocument(filePath);
     isDirty = false;
-    return { canceled: false, filePath, content, name: path.basename(filePath) };
+    return { canceled: false, ...document };
   } catch (error) {
     await dialog.showErrorBox('无法打开文件', error.message);
     return { canceled: true, error: error.message };
@@ -243,11 +311,34 @@ ipcMain.handle('shell:open-external', async (_event, url) => {
   if (/^https?:\/\//i.test(url)) await shell.openExternal(url);
 });
 
-app.whenReady().then(() => {
-  createWindow();
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', async (_event, argv, workingDirectory) => {
+    const filePath = await findDocumentPath(argv, workingDirectory);
+    if (filePath) {
+      await openDocumentPath(filePath);
+    } else if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
   });
+
+  app.whenReady().then(async () => {
+    pendingDocumentPath = pendingDocumentPath || await findDocumentPath(process.argv);
+    createWindow();
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
+  });
+}
+
+app.on('open-file', (event, filePath) => {
+  event.preventDefault();
+  openDocumentPath(filePath);
 });
 
 app.on('before-quit', () => {
