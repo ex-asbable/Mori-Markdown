@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mori Markdown</title>
+    <link rel="stylesheet" href="../node_modules/katex/dist/katex.min.css" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="titlebar">
+      <div class="brand" aria-label="Mori Markdown">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M5 18.2V5.8L12 13l7-7.2v12.4" />
+        </svg>
+        <span>Mori</span>
+      </div>
+      <div id="document-title" class="document-title">未命名</div>
+    </header>
+
+    <nav class="toolbar" aria-label="文档工具栏">
+      <div class="toolbar-group file-actions">
+        <button id="new-button" class="icon-button" title="新建（Ctrl+N）" aria-label="新建文档">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>
+        </button>
+        <button id="open-button" class="icon-button" title="打开（Ctrl+O）" aria-label="打开文档">
+          <svg viewBox="0 0 24 24"><path d="M3.5 7.5h6l2-2h9v13h-17z" /></svg>
+        </button>
+        <button id="save-button" class="icon-button" title="保存（Ctrl+S）" aria-label="保存文档">
+          <svg viewBox="0 0 24 24"><path d="M5 4h12l2 2v14H5zM8 4v6h8V4M8 20v-6h8v6" /></svg>
+        </button>
+      </div>
+
+      <div class="mode-switcher" role="group" aria-label="视图模式">
+        <button class="mode-button active" data-mode="edit">编辑</button>
+        <button class="mode-button" data-mode="split">预览</button>
+        <button class="mode-button" data-mode="read">阅读</button>
+      </div>
+
+      <div class="toolbar-group right-actions">
+        <button id="wrap-button" class="text-button active" title="切换自动换行">换行</button>
+      </div>
+    </nav>
+
+    <main id="workspace" class="workspace mode-edit">
+      <section class="editor-pane" aria-label="Markdown 编辑器">
+        <textarea id="editor" spellcheck="false" aria-label="Markdown 文本"></textarea>
+      </section>
+      <div class="divider" aria-hidden="true"></div>
+      <section class="preview-pane" aria-label="文档预览">
+        <article id="preview" class="markdown-body"></article>
+      </section>
+      <div id="master-scrollbar" class="master-scrollbar" aria-label="同步滚动条" tabindex="0">
+        <div id="master-scroll-track"></div>
+      </div>
+    </main>
+
+    <footer class="statusbar">
+      <div class="status-left">
+        <span id="save-state">已保存</span>
+      </div>
+      <div class="status-right">
+        <span id="cursor-state">行 1，列 1</span>
+        <span id="word-count">0 字</span>
+        <span>Markdown + TeX</span>
+      </div>
+    </footer>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <script src="../node_modules/marked/lib/marked.umd.js"></script>
+    <script src="../node_modules/dompurify/dist/purify.min.js"></script>
+    <script src="../node_modules/katex/dist/katex.min.js"></script>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

@@ -1,0 +1,53 @@
+{
+  "name": "mori-markdown",
+  "version": "0.1.0",
+  "description": "A lightweight Markdown and TeX editor for Windows",
+  "main": "src/main.js",
+  "author": "ex-asbable",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/renderer.js",
+    "smoke": "electron . --smoke",
+    "dist": "electron-builder --win nsis portable"
+  },
+  "dependencies": {
+    "dompurify": "^3.2.6",
+    "katex": "^0.16.22",
+    "marked": "^16.2.0"
+  },
+  "devDependencies": {
+    "electron": "43.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "io.github.ex-asbable.mori-markdown",
+    "productName": "Mori Markdown",
+    "asar": true,
+    "files": [
+      "src/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "artifactName": "Mori-Markdown-Setup-${version}-${arch}.${ext}",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "portable": {
+      "artifactName": "Mori-Markdown-Portable-${version}-${arch}.${ext}"
+    }
+  }
+}
