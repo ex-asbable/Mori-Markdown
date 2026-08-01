@@ -195,6 +195,21 @@ button {
   background: var(--paper);
 }
 
+.editor-pane {
+  position: relative;
+}
+
+.editor-mirror {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: -1;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
 .workspace.mode-split .editor-pane,
 .workspace.mode-split .preview-pane {
   overflow-y: hidden;

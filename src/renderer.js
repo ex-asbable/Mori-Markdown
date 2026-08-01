@@ -8,6 +8,7 @@ const wordCount = document.querySelector('#word-count');
 const toast = document.querySelector('#toast');
 const editorPane = document.querySelector('.editor-pane');
 const previewPane = document.querySelector('.preview-pane');
+const editorMirror = document.querySelector('#editor-mirror');
 const masterScrollbar = document.querySelector('#master-scrollbar');
 const masterScrollTrack = document.querySelector('#master-scroll-track');
 
@@ -39,6 +40,7 @@ const state = {
   mode: 'edit',
   wrap: true,
   syncingScroll: false,
+  scrollAnchors: [],
   renderTimer: null,
   scrollTimer: null,
   toastTimer: null
@@ -109,6 +111,36 @@ marked.use({
   ]
 });
 
+function renderPreviewWithAnchors(source) {
+  const tokens = marked.lexer(source);
+  const fragment = document.createDocumentFragment();
+  let sourceOffset = 0;
+
+  tokens.forEach((token) => {
+    const sourceStart = sourceOffset;
+    sourceOffset += token.raw?.length || 0;
+    if (token.type === 'space' || token.type === 'def') return;
+
+    const tokenList = [token];
+    tokenList.links = tokens.links;
+    const rendered = marked.parser(tokenList);
+    const sanitized = DOMPurify.sanitize(rendered, {
+      ADD_ATTR: ['class', 'aria-hidden'],
+      USE_PROFILES: { html: true }
+    });
+    const template = document.createElement('template');
+    template.innerHTML = sanitized;
+
+    Array.from(template.content.children).forEach((element) => {
+      element.dataset.sourceStart = String(sourceStart);
+      element.dataset.sourceEnd = String(sourceOffset);
+    });
+    fragment.append(template.content);
+  });
+
+  preview.replaceChildren(fragment);
+}
+
 function updatePreview() {
   const source = editor.value;
   if (!source.trim()) {
@@ -117,11 +149,7 @@ function updatePreview() {
     return;
   }
 
-  const rendered = marked.parse(source);
-  preview.innerHTML = DOMPurify.sanitize(rendered, {
-    ADD_ATTR: ['class', 'aria-hidden'],
-    USE_PROFILES: { html: true }
-  });
+  renderPreviewWithAnchors(source);
 
   preview.querySelectorAll('a[href]').forEach((link) => {
     link.addEventListener('click', (event) => {
@@ -176,14 +204,143 @@ function getMasterScrollRange() {
   return Math.max(0, masterScrollbar.scrollHeight - masterScrollbar.clientHeight);
 }
 
+function buildEditorMirror(sourceOffsets) {
+  const computed = window.getComputedStyle(editor);
+  editorMirror.style.width = `${editor.offsetWidth}px`;
+  editorMirror.style.boxSizing = computed.boxSizing;
+  editorMirror.style.padding = computed.padding;
+  editorMirror.style.fontFamily = computed.fontFamily;
+  editorMirror.style.fontSize = computed.fontSize;
+  editorMirror.style.fontWeight = computed.fontWeight;
+  editorMirror.style.fontStyle = computed.fontStyle;
+  editorMirror.style.fontVariant = computed.fontVariant;
+  editorMirror.style.fontStretch = computed.fontStretch;
+  editorMirror.style.lineHeight = computed.lineHeight;
+  editorMirror.style.letterSpacing = computed.letterSpacing;
+  editorMirror.style.wordSpacing = computed.wordSpacing;
+  editorMirror.style.tabSize = computed.tabSize;
+  editorMirror.style.whiteSpace = computed.whiteSpace;
+  editorMirror.style.overflowWrap = computed.overflowWrap;
+  editorMirror.style.wordBreak = computed.wordBreak;
+  editorMirror.replaceChildren();
+
+  const uniqueOffsets = [...new Set(sourceOffsets)].sort((left, right) => left - right);
+  let previousOffset = 0;
+  uniqueOffsets.forEach((offset) => {
+    editorMirror.append(document.createTextNode(editor.value.slice(previousOffset, offset)));
+    const marker = document.createElement('span');
+    marker.className = 'source-map-anchor';
+    marker.dataset.sourceOffset = String(offset);
+    marker.textContent = '\u200b';
+    editorMirror.append(marker);
+    previousOffset = offset;
+  });
+  editorMirror.append(document.createTextNode(editor.value.slice(previousOffset)));
+}
+
+function rebuildScrollAnchors() {
+  const mappedElements = Array.from(preview.querySelectorAll('[data-source-start]'));
+  if (mappedElements.length === 0) {
+    state.scrollAnchors = [];
+    return;
+  }
+
+  const sourceOffsets = [0, editor.value.length];
+  mappedElements.forEach((element) => {
+    sourceOffsets.push(Number(element.dataset.sourceStart), Number(element.dataset.sourceEnd));
+  });
+  buildEditorMirror(sourceOffsets);
+
+  const markerByOffset = new Map(
+    Array.from(editorMirror.querySelectorAll('.source-map-anchor')).map((marker) => [
+      Number(marker.dataset.sourceOffset),
+      marker.offsetTop
+    ])
+  );
+  const anchors = [{ editorY: 0, previewY: 0 }];
+  const previewRect = preview.getBoundingClientRect();
+
+  mappedElements.forEach((element) => {
+    const sourceStart = Number(element.dataset.sourceStart);
+    const sourceEnd = Number(element.dataset.sourceEnd);
+    const editorStart = markerByOffset.get(sourceStart);
+    const editorEnd = markerByOffset.get(sourceEnd);
+    const previewStart = element.getBoundingClientRect().top - previewRect.top;
+    if (Number.isFinite(editorStart)) {
+      anchors.push({ editorY: editorStart, previewY: previewStart });
+    }
+    if (Number.isFinite(editorEnd)) {
+      anchors.push({
+        editorY: editorEnd,
+        previewY: previewStart + element.offsetHeight
+      });
+    }
+  });
+  anchors.push({ editorY: editor.scrollHeight, previewY: preview.scrollHeight });
+  anchors.sort((left, right) => left.editorY - right.editorY || left.previewY - right.previewY);
+
+  const normalized = [];
+  anchors.forEach((anchor) => {
+    const previous = normalized.at(-1);
+    if (previous && Math.abs(previous.editorY - anchor.editorY) < 0.5) {
+      previous.previewY = Math.max(previous.previewY, anchor.previewY);
+      return;
+    }
+    normalized.push({
+      editorY: anchor.editorY,
+      previewY: previous ? Math.max(previous.previewY, anchor.previewY) : anchor.previewY
+    });
+  });
+  state.scrollAnchors = normalized;
+}
+
+function mapEditorYToPreviewY(editorY) {
+  const anchors = state.scrollAnchors;
+  if (anchors.length < 2) {
+    const editorHeight = Math.max(1, editor.scrollHeight);
+    return (editorY / editorHeight) * preview.scrollHeight;
+  }
+
+  if (editorY <= anchors[0].editorY) return anchors[0].previewY;
+  if (editorY >= anchors.at(-1).editorY) return anchors.at(-1).previewY;
+
+  let low = 0;
+  let high = anchors.length - 1;
+  while (high - low > 1) {
+    const middle = Math.floor((low + high) / 2);
+    if (anchors[middle].editorY <= editorY) low = middle;
+    else high = middle;
+  }
+
+  const start = anchors[low];
+  const end = anchors[high];
+  const distance = Math.max(1, end.editorY - start.editorY);
+  const ratio = (editorY - start.editorY) / distance;
+  return start.previewY + (end.previewY - start.previewY) * ratio;
+}
+
 function syncPanesFromMaster() {
   if (state.mode !== 'split') return;
   const masterRange = getMasterScrollRange();
   const progress = masterRange > 0 ? masterScrollbar.scrollTop / masterRange : 0;
 
   state.syncingScroll = true;
-  editorPane.scrollTop = progress * getScrollRange(editorPane);
-  previewPane.scrollTop = progress * getScrollRange(previewPane);
+  const editorRange = getScrollRange(editorPane);
+  const previewRange = getScrollRange(previewPane);
+  editorPane.scrollTop = progress * editorRange;
+
+  if (progress <= 0) {
+    previewPane.scrollTop = 0;
+  } else if (progress >= 1) {
+    previewPane.scrollTop = previewRange;
+  } else {
+    const editorCenter = editorPane.scrollTop + editorPane.clientHeight / 2;
+    const previewCenter = mapEditorYToPreviewY(editorCenter);
+    previewPane.scrollTop = Math.max(
+      0,
+      Math.min(previewRange, previewCenter - previewPane.clientHeight / 2)
+    );
+  }
   window.requestAnimationFrame(() => {
     state.syncingScroll = false;
   });
@@ -192,7 +349,8 @@ function syncPanesFromMaster() {
 function updateSharedScroll() {
   if (state.mode !== 'split') return;
   const previousScrollTop = masterScrollbar.scrollTop;
-  const contentRange = Math.max(getScrollRange(editorPane), getScrollRange(previewPane));
+  rebuildScrollAnchors();
+  const contentRange = getScrollRange(editorPane);
   masterScrollTrack.style.height = `${masterScrollbar.clientHeight + contentRange}px`;
   masterScrollbar.scrollTop = Math.min(previousScrollTop, getMasterScrollRange());
   syncPanesFromMaster();

@@ -93,6 +93,49 @@ function createWindow() {
         app.exit(1);
         return;
       }
+      const alignmentTest = await mainWindow.webContents.executeJavaScript(
+        `(() => {
+          const editorPane = document.querySelector('.editor-pane');
+          const previewPane = document.querySelector('.preview-pane');
+          const mirror = document.querySelector('#editor-mirror');
+          const mapped = Array.from(document.querySelectorAll('#preview [data-source-start]'));
+          const markerPositions = new Map(
+            Array.from(mirror.querySelectorAll('.source-map-anchor')).map((marker) => [
+              Number(marker.dataset.sourceOffset),
+              marker.offsetTop
+            ])
+          );
+          const editorCenter = editorPane.scrollTop + editorPane.clientHeight / 2;
+          const leftBlock = mapped.reduce((closest, element) => {
+            const start = markerPositions.get(Number(element.dataset.sourceStart));
+            const end = markerPositions.get(Number(element.dataset.sourceEnd));
+            if (!Number.isFinite(start) || !Number.isFinite(end)) return closest;
+            const distance = editorCenter < start
+              ? start - editorCenter
+              : editorCenter > end
+                ? editorCenter - end
+                : 0;
+            return !closest || distance < closest.distance ? { element, distance } : closest;
+          }, null)?.element;
+          const viewportCenter = previewPane.getBoundingClientRect().top + previewPane.clientHeight / 2;
+          const rightBlock = mapped.reduce((closest, element) => {
+            const rect = element.getBoundingClientRect();
+            const distance = viewportCenter < rect.top
+              ? rect.top - viewportCenter
+              : viewportCenter > rect.bottom
+                ? viewportCenter - rect.bottom
+                : 0;
+            return !closest || distance < closest.distance ? { element, distance } : closest;
+          }, null)?.element;
+          return {
+            leftStart: leftBlock?.dataset.sourceStart,
+            rightStart: rightBlock?.dataset.sourceStart,
+            leftText: leftBlock?.textContent?.trim().slice(0, 40),
+            rightText: rightBlock?.textContent?.trim().slice(0, 40)
+          };
+        })()`
+      );
+      console.log(`Smoke center alignment: ${JSON.stringify(alignmentTest)}`);
       const image = await mainWindow.webContents.capturePage();
       await fs.writeFile(path.join(artifactsDirectory, 'smoke.png'), image.toPNG());
       isQuitting = true;
