@@ -36,6 +36,7 @@ $$
 const state = {
   filePath: null,
   fileName: '未命名',
+  savedContent: '',
   dirty: false,
   mode: 'edit',
   wrap: true,
@@ -45,6 +46,11 @@ const state = {
   scrollTimer: null,
   toastTimer: null
 };
+
+const undoHistory = new window.MoriUndoHistory({ limit: 200, mergeDelay: 1000 });
+let pendingBeforeInput = null;
+let compositionSnapshot = null;
+let isComposing = false;
 
 function escapeHtml(value) {
   const span = document.createElement('span');
@@ -383,10 +389,57 @@ function showToast(message) {
   state.toastTimer = window.setTimeout(() => toast.classList.remove('visible'), 1600);
 }
 
+function captureEditorSnapshot() {
+  return {
+    value: editor.value,
+    selectionStart: editor.selectionStart,
+    selectionEnd: editor.selectionEnd,
+    selectionDirection: editor.selectionDirection
+  };
+}
+
+function refreshAfterEditorChange() {
+  const dirty = editor.value !== state.savedContent;
+  if (dirty !== state.dirty) setDirty(dirty);
+  schedulePreview();
+  updateStats();
+  updateEditorHeight();
+}
+
+function applyHistoryResult(result) {
+  if (!result) return;
+  const previousEditorScroll = editorPane.scrollTop;
+  const previousMasterScroll = masterScrollbar.scrollTop;
+  editor.value = result.value;
+  editor.setSelectionRange(
+    result.selection.start,
+    result.selection.end,
+    result.selection.direction
+  );
+  editorPane.scrollTop = previousEditorScroll;
+  masterScrollbar.scrollTop = previousMasterScroll;
+  refreshAfterEditorChange();
+}
+
+function undo() {
+  pendingBeforeInput = null;
+  applyHistoryResult(undoHistory.undo(editor.value));
+}
+
+function redo() {
+  pendingBeforeInput = null;
+  applyHistoryResult(undoHistory.redo(editor.value));
+}
+
 function setContent(content, filePath = null, fileName = '未命名') {
   editor.value = content;
   state.filePath = filePath;
   state.fileName = fileName;
+  state.savedContent = content;
+  pendingBeforeInput = null;
+  compositionSnapshot = null;
+  isComposing = false;
+  undoHistory.reset();
   setDirty(false);
   updatePreview();
   updateStats();
@@ -405,6 +458,8 @@ async function saveDocument(saveAs = false) {
   if (!result.canceled) {
     state.filePath = result.filePath;
     state.fileName = result.name;
+    state.savedContent = editor.value;
+    undoHistory.breakGroup();
     setDirty(false);
     showToast('已保存');
     return true;
@@ -443,15 +498,62 @@ function setMode(mode) {
   if (mode === 'split') scheduleSharedScrollUpdate();
 }
 
-editor.addEventListener('input', () => {
-  if (!state.dirty) setDirty(true);
-  schedulePreview();
-  updateStats();
-  updateEditorHeight();
+editor.addEventListener('beforeinput', (event) => {
+  if (event.inputType === 'historyUndo' || event.inputType === 'historyRedo') {
+    event.preventDefault();
+    if (event.inputType === 'historyUndo') undo();
+    else redo();
+    return;
+  }
+  if (isComposing || event.isComposing) return;
+  pendingBeforeInput = {
+    snapshot: captureEditorSnapshot(),
+    inputType: event.inputType
+  };
+});
+
+editor.addEventListener('input', (event) => {
+  if (isComposing || event.isComposing) {
+    pendingBeforeInput = null;
+  } else if (pendingBeforeInput) {
+    undoHistory.record(
+      pendingBeforeInput.snapshot,
+      captureEditorSnapshot(),
+      event.inputType || pendingBeforeInput.inputType
+    );
+    pendingBeforeInput = null;
+  } else {
+    undoHistory.breakGroup();
+  }
+  refreshAfterEditorChange();
+});
+
+editor.addEventListener('compositionstart', () => {
+  undoHistory.breakGroup();
+  pendingBeforeInput = null;
+  compositionSnapshot = captureEditorSnapshot();
+  isComposing = true;
+});
+
+editor.addEventListener('compositionend', () => {
+  isComposing = false;
+  pendingBeforeInput = null;
+  if (compositionSnapshot) {
+    undoHistory.record(
+      compositionSnapshot,
+      captureEditorSnapshot(),
+      'insertCompositionText'
+    );
+  }
+  compositionSnapshot = null;
+  undoHistory.breakGroup();
+  refreshAfterEditorChange();
 });
 
 editor.addEventListener('click', updateStats);
 editor.addEventListener('keyup', updateStats);
+editor.addEventListener('pointerdown', () => undoHistory.breakGroup());
+editor.addEventListener('blur', () => undoHistory.breakGroup());
 
 masterScrollbar.addEventListener('scroll', syncPanesFromMaster);
 
@@ -467,12 +569,43 @@ masterScrollbar.addEventListener('scroll', syncPanesFromMaster);
   );
 });
 editor.addEventListener('keydown', (event) => {
+  const key = event.key.toLowerCase();
+  const primaryModifier = (event.ctrlKey || event.metaKey) && !event.altKey;
+  if (!isComposing && primaryModifier && key === 'z') {
+    event.preventDefault();
+    if (event.shiftKey) redo();
+    else undo();
+    return;
+  }
+  if (!isComposing && primaryModifier && key === 'y') {
+    event.preventDefault();
+    redo();
+    return;
+  }
+
+  const navigationKeys = new Set([
+    'arrowleft',
+    'arrowright',
+    'arrowup',
+    'arrowdown',
+    'home',
+    'end',
+    'pageup',
+    'pagedown'
+  ]);
+  if (navigationKeys.has(key) || (primaryModifier && key === 'a')) {
+    undoHistory.breakGroup();
+  }
+
   if (event.key === 'Tab') {
     event.preventDefault();
+    const before = captureEditorSnapshot();
     const start = editor.selectionStart;
     const end = editor.selectionEnd;
     editor.setRangeText('  ', start, end, 'end');
-    editor.dispatchEvent(new Event('input'));
+    undoHistory.breakGroup();
+    undoHistory.record(before, captureEditorSnapshot(), 'insertTab');
+    refreshAfterEditorChange();
   }
 });
 

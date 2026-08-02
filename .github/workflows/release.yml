@@ -47,6 +47,9 @@ jobs:
       - name: Check JavaScript syntax
         run: npm run check
 
+      - name: Run unit tests
+        run: npm test
+
       - name: Build Windows executables
         run: npm run dist -- --publish never
 

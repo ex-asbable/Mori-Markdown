@@ -112,6 +112,59 @@ function createWindow() {
         }
         console.log(`Smoke startup document: ${lastOpenedDocumentPath}`);
       }
+      const undoTest = await mainWindow.webContents.executeJavaScript(
+        `(() => {
+          const editor = document.querySelector('#editor');
+          const original = editor.value;
+          const addition = 'undo-group';
+          editor.focus();
+          editor.setSelectionRange(original.length, original.length);
+          for (const character of addition) {
+            const beforeInput = new InputEvent('beforeinput', {
+              bubbles: true,
+              cancelable: true,
+              inputType: 'insertText',
+              data: character
+            });
+            if (!editor.dispatchEvent(beforeInput)) continue;
+            editor.setRangeText(character, editor.selectionStart, editor.selectionEnd, 'end');
+            editor.dispatchEvent(new InputEvent('input', {
+              bubbles: true,
+              inputType: 'insertText',
+              data: character
+            }));
+          }
+          const typed = editor.value === original + addition;
+          editor.dispatchEvent(new KeyboardEvent('keydown', {
+            bubbles: true,
+            cancelable: true,
+            key: 'z',
+            ctrlKey: true
+          }));
+          const undoneAsGroup = editor.value === original;
+          editor.dispatchEvent(new KeyboardEvent('keydown', {
+            bubbles: true,
+            cancelable: true,
+            key: 'y',
+            ctrlKey: true
+          }));
+          const redoneAsGroup = editor.value === original + addition;
+          editor.dispatchEvent(new KeyboardEvent('keydown', {
+            bubbles: true,
+            cancelable: true,
+            key: 'z',
+            ctrlKey: true
+          }));
+          return { typed, undoneAsGroup, redoneAsGroup };
+        })()`
+      );
+      console.log(`Smoke grouped undo: ${JSON.stringify(undoTest)}`);
+      if (!undoTest.typed || !undoTest.undoneAsGroup || !undoTest.redoneAsGroup) {
+        console.error('Grouped undo/redo smoke test failed');
+        isQuitting = true;
+        app.exit(1);
+        return;
+      }
       const artifactsDirectory = path.join(__dirname, '..', 'artifacts');
       await fs.mkdir(artifactsDirectory, { recursive: true });
       await mainWindow.webContents.executeJavaScript(
