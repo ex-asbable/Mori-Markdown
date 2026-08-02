@@ -75,6 +75,14 @@ function renderMath(source, displayMode) {
 marked.use({
   gfm: true,
   breaks: false,
+  renderer: {
+    image({ href, title: imageTitle, text }) {
+      const titleAttribute = imageTitle
+        ? ` title="${escapeHtml(imageTitle)}"`
+        : '';
+      return `<img data-resource-src="${escapeHtml(href)}" alt="${escapeHtml(text)}"${titleAttribute}>`;
+    }
+  },
   extensions: [
     {
       name: 'displayMath',
@@ -132,7 +140,7 @@ function renderPreviewWithAnchors(source) {
     tokenList.links = tokens.links;
     const rendered = marked.parser(tokenList);
     const sanitized = DOMPurify.sanitize(rendered, {
-      ADD_ATTR: ['class', 'aria-hidden'],
+      ADD_ATTR: ['class', 'aria-hidden', 'data-resource-src'],
       USE_PROFILES: { html: true }
     });
     const template = document.createElement('template');
