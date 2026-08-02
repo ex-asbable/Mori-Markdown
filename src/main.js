@@ -1,6 +1,7 @@
 const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { fileURLToPath, pathToFileURL } = require('node:url');
 
 let mainWindow;
 let isDirty = false;
@@ -63,16 +64,18 @@ async function getUntitledSavePath() {
 }
 
 function resolveLocalResource(filePath, href) {
-  if (!filePath || typeof href !== 'string' || !href || /\0/.test(href)) return null;
+  if (typeof href !== 'string' || !href || /\0/.test(href)) return null;
   let candidate;
   try {
-    const documentDirectory = path.resolve(path.dirname(filePath));
-    const parsed = /^file:\/\//i.test(href) ? new URL(href) : null;
     const localReference = decodeURIComponent(href.split(/[?#]/, 1)[0]);
-    candidate = parsed ? path.resolve(decodeURIComponent(parsed.pathname.replace(/^\//, ''))) :
-      path.resolve(documentDirectory, localReference);
-    const relative = path.relative(documentDirectory, candidate);
-    if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
+    if (/^file:\/\//i.test(href)) {
+      candidate = path.resolve(fileURLToPath(new URL(href)));
+    } else if (path.isAbsolute(localReference)) {
+      candidate = path.resolve(localReference);
+    } else {
+      if (!filePath) return null;
+      candidate = path.resolve(path.dirname(filePath), localReference);
+    }
   } catch {
     return null;
   }
@@ -484,7 +487,7 @@ ipcMain.handle('resource:resolve', async (_event, { href, filePath }) => {
   if (!resourcePath) return null;
   try {
     return (await fs.stat(resourcePath)).isFile()
-      ? new URL(`file:///${resourcePath.replace(/\\/g, '/')}`).href
+      ? pathToFileURL(resourcePath).href
       : null;
   } catch {
     return null;

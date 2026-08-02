@@ -745,6 +745,8 @@ setContent(initialContent);
       document.querySelector('#wrap-button').classList.remove('active');
     }
     if (['edit', 'split', 'read'].includes(session.mode)) setMode(session.mode);
+  } else if (session) {
+    setContent('');
   }
   state.sessionReady = true;
   persistSession();
