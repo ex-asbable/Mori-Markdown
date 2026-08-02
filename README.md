@@ -8,9 +8,11 @@ Mori 是一个面向 Windows 的轻量 Markdown 与 TeX 桌面编辑器。它专
 - `$...$`、`$$...$$`、`\\(...\\)`、`\\[...\\]` TeX 公式
 - 编辑、分栏预览、沉浸阅读三种模式
 - 分栏模式使用单一主滚动条，按标题、段落、列表、代码块与公式建立语义锚点，同步左右视口中心
-- 打开与保存 `.md`、`.markdown`、`.tex`、`.txt` 文件
+- 打开与保存 `.md`、`.markdown`、`.tex`、`.txt` 文件；`保存`会将未命名文档直接存入应用旁的 `Mori Repository`，`另存为`（`Ctrl+Shift+S`）始终询问位置
+- VS Code 风格热恢复：关闭窗口不再提示保存，未保存内容会在下次普通启动时恢复；通过文件关联或命令行打开文件时以指定文件为准
+- 代码块使用 Highlight.js 本地高亮，并支持 Markdown 链接和图片（HTTP(S)、data URI 及当前文档目录内的相对本地资源）
 - 自动换行、字数与光标位置统计
-- 未保存内容保护
+- 未保存内容热恢复
 - 所有渲染依赖均为本地资源，运行时无需联网
 
 ## 开发运行
@@ -32,8 +34,8 @@ npm.cmd run dist
 
 构建结果会生成在 `release` 目录：
 
-- `Mori-Markdown-Setup-0.1.0-x64.exe`：Windows 安装版
-- `Mori-Markdown-Portable-0.1.0-x64.exe`：无需安装的便携版
+- `Mori-Markdown-Setup-0.2.0-x64.exe`：Windows 安装版
+- `Mori-Markdown-Portable-0.2.0-x64.exe`：无需安装的便携版
 
 ## 快捷键
 

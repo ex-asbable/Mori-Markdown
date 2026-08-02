@@ -44,7 +44,8 @@ const state = {
   scrollAnchors: [],
   renderTimer: null,
   scrollTimer: null,
-  toastTimer: null
+  toastTimer: null,
+  sessionReady: false
 };
 
 const undoHistory = new window.MoriUndoHistory({ limit: 200, mergeDelay: 1000 });
@@ -137,6 +138,11 @@ function renderPreviewWithAnchors(source) {
     const template = document.createElement('template');
     template.innerHTML = sanitized;
 
+    template.content.querySelectorAll('img[src]').forEach((image) => {
+      image.dataset.resourceSrc = image.getAttribute('src');
+      image.removeAttribute('src');
+    });
+
     Array.from(template.content.children).forEach((element) => {
       element.dataset.sourceStart = String(sourceStart);
       element.dataset.sourceEnd = String(sourceOffset);
@@ -145,6 +151,46 @@ function renderPreviewWithAnchors(source) {
   });
 
   preview.replaceChildren(fragment);
+}
+
+function enhancePreviewResources() {
+  preview.querySelectorAll('pre code').forEach((block) => {
+    if (!window.hljs) return;
+    const languageClass = Array.from(block.classList).find((name) => name.startsWith('language-'));
+    const language = languageClass?.slice('language-'.length);
+    if (language && hljs.getLanguage(language)) {
+      hljs.highlightElement(block);
+    } else {
+      const result = hljs.highlightAuto(block.textContent);
+      block.innerHTML = result.value;
+      block.classList.add('hljs');
+    }
+  });
+
+  preview.querySelectorAll('img[data-resource-src]').forEach(async (image) => {
+    const source = image.dataset.resourceSrc;
+    const resolved = await window.desktop.resolveResource({ href: source, filePath: state.filePath });
+    if (!image.isConnected || image.dataset.resourceSrc !== source) return;
+    if (resolved) image.src = resolved;
+    else image.removeAttribute('src');
+  });
+
+  preview.querySelectorAll('a[href]').forEach((link) => {
+    link.addEventListener('click', async (event) => {
+      const href = link.getAttribute('href');
+      if (/^https?:\/\//i.test(href)) {
+        event.preventDefault();
+        window.desktop.openExternal(href);
+        return;
+      }
+      if (href.startsWith('#')) return;
+      event.preventDefault();
+      const result = await window.desktop.openLinkedDocument({ href, filePath: state.filePath });
+      if (!result.canceled && (await resolveReplacement())) {
+        setContent(result.content, result.filePath, result.name);
+      }
+    });
+  });
 }
 
 function updatePreview() {
@@ -157,15 +203,7 @@ function updatePreview() {
 
   renderPreviewWithAnchors(source);
 
-  preview.querySelectorAll('a[href]').forEach((link) => {
-    link.addEventListener('click', (event) => {
-      const href = link.getAttribute('href');
-      if (/^https?:\/\//i.test(href)) {
-        event.preventDefault();
-        window.desktop.openExternal(href);
-      }
-    });
-  });
+  enhancePreviewResources();
 
   scheduleSharedScrollUpdate();
 }
@@ -181,7 +219,31 @@ function setDirty(value) {
   title.textContent = `${value ? '• ' : ''}${state.fileName}`;
   document.title = `${value ? '• ' : ''}${state.fileName} — Mori Markdown`;
   window.desktop.setDirty(value);
+  persistSession();
 }
+
+function persistSession() {
+  if (!state.sessionReady) return;
+  window.desktop.saveSession({
+    content: editor.value,
+    filePath: state.filePath,
+    fileName: state.fileName,
+    savedContent: state.savedContent,
+    dirty: state.dirty,
+    mode: state.mode,
+    wrap: state.wrap
+  });
+}
+
+window.__moriGetSession = () => ({
+  content: editor.value,
+  filePath: state.filePath,
+  fileName: state.fileName,
+  savedContent: state.savedContent,
+  dirty: state.dirty,
+  mode: state.mode,
+  wrap: state.wrap
+});
 
 function updateEditorHeight() {
   const previousEditorScroll = editorPane.scrollTop;
@@ -404,6 +466,7 @@ function refreshAfterEditorChange() {
   schedulePreview();
   updateStats();
   updateEditorHeight();
+  persistSession();
 }
 
 function applyHistoryResult(result) {
@@ -446,9 +509,11 @@ function setContent(content, filePath = null, fileName = '未命名') {
   updateEditorHeight();
   editor.focus();
   editor.setSelectionRange(0, 0);
+  persistSession();
 }
 
 async function saveDocument(saveAs = false) {
+  const previousFilePath = state.filePath;
   const result = await window.desktop.saveDocument({
     content: editor.value,
     filePath: state.filePath,
@@ -461,6 +526,7 @@ async function saveDocument(saveAs = false) {
     state.savedContent = editor.value;
     undoHistory.breakGroup();
     setDirty(false);
+    if (saveAs || !previousFilePath) updatePreview();
     showToast('已保存');
     return true;
   }
@@ -496,6 +562,7 @@ function setMode(mode) {
   if (mode !== 'edit') updatePreview();
   if (mode !== 'read') updateEditorHeight();
   if (mode === 'split') scheduleSharedScrollUpdate();
+  persistSession();
 }
 
 editor.addEventListener('beforeinput', (event) => {
@@ -612,6 +679,7 @@ editor.addEventListener('keydown', (event) => {
 document.querySelector('#new-button').addEventListener('click', newDocument);
 document.querySelector('#open-button').addEventListener('click', openDocument);
 document.querySelector('#save-button').addEventListener('click', () => saveDocument(false));
+document.querySelector('#save-as-button').addEventListener('click', () => saveDocument(true));
 
 document.querySelectorAll('.mode-button').forEach((button) => {
   button.addEventListener('click', () => setMode(button.dataset.mode));
@@ -622,6 +690,7 @@ document.querySelector('#wrap-button').addEventListener('click', (event) => {
   editor.classList.toggle('nowrap', !state.wrap);
   event.currentTarget.classList.toggle('active', state.wrap);
   updateEditorHeight();
+  persistSession();
 });
 
 document.addEventListener('keydown', (event) => {
@@ -653,11 +722,6 @@ window.addEventListener('resize', () => {
   scheduleSharedScrollUpdate();
 });
 
-window.desktop.onSaveBeforeClose(async () => {
-  const saved = await saveDocument(false);
-  if (saved) window.desktop.closeAfterSave();
-});
-
 let externalOpenQueue = Promise.resolve();
 window.desktop.onOpenPath((document) => {
   externalOpenQueue = externalOpenQueue.then(async () => {
@@ -668,3 +732,20 @@ window.desktop.onOpenPath((document) => {
 });
 
 setContent(initialContent);
+
+(async () => {
+  const session = await window.desktop.loadSession();
+  if (session?.dirty) {
+    setContent(session.content, session.filePath, session.fileName);
+    state.savedContent = typeof session.savedContent === 'string' ? session.savedContent : '';
+    setDirty(true);
+    if (session.wrap === false) {
+      state.wrap = false;
+      editor.classList.add('nowrap');
+      document.querySelector('#wrap-button').classList.remove('active');
+    }
+    if (['edit', 'split', 'read'].includes(session.mode)) setMode(session.mode);
+  }
+  state.sessionReady = true;
+  persistSession();
+})();

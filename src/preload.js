@@ -5,11 +5,11 @@ contextBridge.exposeInMainWorld('desktop', {
   openDocument: () => ipcRenderer.invoke('document:open'),
   saveDocument: (payload) => ipcRenderer.invoke('document:save', payload),
   setDirty: (value) => ipcRenderer.send('document:set-dirty', value),
-  closeAfterSave: () => ipcRenderer.send('document:close-after-save'),
+  loadSession: () => ipcRenderer.invoke('session:load'),
+  saveSession: (session) => ipcRenderer.send('session:save', session),
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
-  onSaveBeforeClose: (callback) => {
-    ipcRenderer.on('document:save-before-close', callback);
-  },
+  resolveResource: (payload) => ipcRenderer.invoke('resource:resolve', payload),
+  openLinkedDocument: (payload) => ipcRenderer.invoke('document:open-link', payload),
   onOpenPath: (callback) => {
     ipcRenderer.on('document:open-path', (_event, document) => callback(document));
   }

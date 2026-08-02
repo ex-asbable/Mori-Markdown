@@ -8,6 +8,76 @@ let isQuitting = false;
 let pendingDocumentPath = null;
 let lastOpenedDocumentPath = null;
 let rendererReady = false;
+let sessionWrite = Promise.resolve();
+let isClosing = false;
+const isSmokeMode = process.argv.includes('--smoke');
+
+function getSessionPath() {
+  return path.join(app.getPath('userData'), 'session.json');
+}
+
+async function loadSession() {
+  try {
+    const raw = await fs.readFile(getSessionPath(), 'utf8');
+    const session = JSON.parse(raw);
+    return session && typeof session.content === 'string' ? session : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSession(session) {
+  if (isSmokeMode) return Promise.resolve();
+  sessionWrite = sessionWrite.then(async () => {
+    const sessionPath = getSessionPath();
+    await fs.mkdir(path.dirname(sessionPath), { recursive: true });
+    const temporaryPath = `${sessionPath}.tmp`;
+    await fs.writeFile(temporaryPath, JSON.stringify(session), 'utf8');
+    await fs.rename(temporaryPath, sessionPath);
+  }).catch((error) => console.error('Unable to save session:', error));
+  return sessionWrite;
+}
+
+function getRepositoryDirectory() {
+  return app.isPackaged
+    ? path.join(path.dirname(app.getPath('exe')), 'Mori Repository')
+    : path.join(app.getAppPath(), 'Mori Repository');
+}
+
+async function getUntitledSavePath() {
+  const directory = getRepositoryDirectory();
+  try {
+    await fs.mkdir(directory, { recursive: true });
+    for (let index = 0; ; index += 1) {
+      const fileName = index === 0 ? '未命名.md' : `未命名 ${index + 1}.md`;
+      const filePath = path.join(directory, fileName);
+      try {
+        await fs.access(filePath);
+      } catch {
+        return filePath;
+      }
+    }
+  } catch (error) {
+    throw new Error(`无法在 Mori Repository 中创建文件（${directory}）：${error.message}`);
+  }
+}
+
+function resolveLocalResource(filePath, href) {
+  if (!filePath || typeof href !== 'string' || !href || /\0/.test(href)) return null;
+  let candidate;
+  try {
+    const documentDirectory = path.resolve(path.dirname(filePath));
+    const parsed = /^file:\/\//i.test(href) ? new URL(href) : null;
+    const localReference = decodeURIComponent(href.split(/[?#]/, 1)[0]);
+    candidate = parsed ? path.resolve(decodeURIComponent(parsed.pathname.replace(/^\//, ''))) :
+      path.resolve(documentDirectory, localReference);
+    const relative = path.relative(documentDirectory, candidate);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
+  } catch {
+    return null;
+  }
+  return candidate;
+}
 
 const documentFilters = [
   { name: 'Markdown / TeX', extensions: ['md', 'markdown', 'mdown', 'mkd', 'tex', 'txt'] },
@@ -165,6 +235,31 @@ function createWindow() {
         app.exit(1);
         return;
       }
+      const markdownFeatureTest = await mainWindow.webContents.executeJavaScript(
+        `(() => {
+          const editor = document.querySelector('#editor');
+          const fence = String.fromCharCode(96).repeat(3);
+          editor.value = fence + 'javascript\\nconst answer = 42;\\n' + fence + '\\n\\n[OpenAI](https://openai.com)\\n\\n![image](https://example.com/image.png)';
+          editor.dispatchEvent(new Event('input', { bubbles: true }));
+          window.__moriMarkdownFeatureTest = () => ({
+            highlighted: Boolean(document.querySelector('pre code.hljs')),
+            link: document.querySelector('#preview a')?.getAttribute('href'),
+            image: document.querySelector('#preview img')?.getAttribute('src')
+          });
+        })()`
+      );
+      await new Promise((resolve) => setTimeout(resolve, 180));
+      const markdownFeatureResult = await mainWindow.webContents.executeJavaScript(
+        'window.__moriMarkdownFeatureTest()'
+      );
+      console.log(`Smoke markdown features: ${JSON.stringify(markdownFeatureResult)}`);
+      if (!markdownFeatureResult.highlighted || !/^https:\/\//.test(markdownFeatureResult.link) ||
+        !/^https:\/\//.test(markdownFeatureResult.image)) {
+        console.error('Markdown highlight, link, or image smoke test failed');
+        isQuitting = true;
+        app.exit(1);
+        return;
+      }
       const artifactsDirectory = path.join(__dirname, '..', 'artifacts');
       await fs.mkdir(artifactsDirectory, { recursive: true });
       await mainWindow.webContents.executeJavaScript(
@@ -264,18 +359,22 @@ function createWindow() {
     }
   });
 
-  mainWindow.on('close', async (event) => {
-    if (!isDirty || isQuitting) return;
-
+  // Session state is written continuously. Closing never prompts: the most recent
+  // unsaved document is restored on the next launch.
+  mainWindow.on('close', (event) => {
+    if (isQuitting || isClosing) return;
     event.preventDefault();
-    const choice = await showUnsavedDialog();
-    if (choice === 0) {
-      mainWindow.webContents.send('document:save-before-close');
-    } else if (choice === 1) {
-      isDirty = false;
-      isQuitting = true;
-      mainWindow.close();
-    }
+    isClosing = true;
+    mainWindow.webContents.executeJavaScript('window.__moriGetSession?.()')
+      .then((session) => {
+        if (session?.content != null) return saveSession(session);
+        return sessionWrite;
+      })
+      .catch(() => sessionWrite)
+      .finally(() => {
+        isQuitting = true;
+        mainWindow?.close();
+      });
   });
 }
 
@@ -330,13 +429,22 @@ ipcMain.handle('document:save', async (_event, payload) => {
   let filePath = payload.filePath;
 
   if (!filePath || payload.saveAs) {
-    const result = await dialog.showSaveDialog(mainWindow, {
-      title: '保存文档',
-      defaultPath: filePath || '未命名.md',
-      filters: documentFilters
-    });
-    if (result.canceled || !result.filePath) return { canceled: true };
-    filePath = result.filePath;
+    if (!payload.saveAs) {
+      try {
+        filePath = await getUntitledSavePath();
+      } catch (error) {
+        dialog.showErrorBox('无法保存文件', error.message);
+        return { canceled: true, error: error.message };
+      }
+    } else {
+      const result = await dialog.showSaveDialog(mainWindow, {
+        title: '保存文档',
+        defaultPath: filePath || '未命名.md',
+        filters: documentFilters
+      });
+      if (result.canceled || !result.filePath) return { canceled: true };
+      filePath = result.filePath;
+    }
   }
 
   try {
@@ -353,10 +461,43 @@ ipcMain.on('document:set-dirty', (_event, value) => {
   isDirty = Boolean(value);
 });
 
-ipcMain.on('document:close-after-save', () => {
-  if (!isDirty) {
-    isQuitting = true;
-    mainWindow.close();
+ipcMain.handle('session:load', () => {
+  if (isSmokeMode || pendingDocumentPath || lastOpenedDocumentPath) return null;
+  return loadSession();
+});
+ipcMain.on('session:save', (_event, session) => {
+  if (!session || typeof session.content !== 'string') return;
+  saveSession({
+    content: session.content,
+    filePath: typeof session.filePath === 'string' ? session.filePath : null,
+    fileName: typeof session.fileName === 'string' ? session.fileName : '未命名',
+    savedContent: typeof session.savedContent === 'string' ? session.savedContent : session.content,
+    dirty: Boolean(session.dirty),
+    mode: ['edit', 'split', 'read'].includes(session.mode) ? session.mode : 'edit',
+    wrap: session.wrap !== false
+  });
+});
+
+ipcMain.handle('resource:resolve', async (_event, { href, filePath }) => {
+  if (/^https?:\/\//i.test(href) || /^data:image\//i.test(href)) return href;
+  const resourcePath = resolveLocalResource(filePath, href);
+  if (!resourcePath) return null;
+  try {
+    return (await fs.stat(resourcePath)).isFile()
+      ? new URL(`file:///${resourcePath.replace(/\\/g, '/')}`).href
+      : null;
+  } catch {
+    return null;
+  }
+});
+
+ipcMain.handle('document:open-link', async (_event, { href, filePath }) => {
+  const targetPath = resolveLocalResource(filePath, href);
+  if (!targetPath) return { canceled: true };
+  try {
+    return { canceled: false, ...(await readDocument(targetPath)) };
+  } catch (error) {
+    return { canceled: true, error: error.message };
   }
 });
 

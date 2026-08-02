@@ -4,11 +4,12 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: http: https: file:; font-src 'self'; connect-src 'none'"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Mori Markdown</title>
     <link rel="stylesheet" href="../node_modules/katex/dist/katex.min.css" />
+    <link rel="stylesheet" href="../node_modules/@highlightjs/cdn-assets/styles/github.min.css" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -32,6 +33,9 @@
         </button>
         <button id="save-button" class="icon-button" title="保存（Ctrl+S）" aria-label="保存文档">
           <svg viewBox="0 0 24 24"><path d="M5 4h12l2 2v14H5zM8 4v6h8V4M8 20v-6h8v6" /></svg>
+        </button>
+        <button id="save-as-button" class="icon-button" title="另存为（Ctrl+Shift+S）" aria-label="另存为">
+          <svg viewBox="0 0 24 24"><path d="M5 4h12l2 2v14H5zM8 4v6h8V4M12 14v6M9 17h6" /></svg>
         </button>
       </div>
 
@@ -76,6 +80,7 @@
     <script src="../node_modules/marked/lib/marked.umd.js"></script>
     <script src="../node_modules/dompurify/dist/purify.min.js"></script>
     <script src="../node_modules/katex/dist/katex.min.js"></script>
+    <script src="../node_modules/@highlightjs/cdn-assets/highlight.min.js"></script>
     <script src="./undo-history.js"></script>
     <script src="./renderer.js"></script>
   </body>
