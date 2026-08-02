@@ -75,12 +75,61 @@ button {
   position: absolute;
   left: 50%;
   max-width: 45%;
+  display: flex;
+  align-items: center;
+  padding: 4px 7px;
   overflow: hidden;
+  border: 0;
+  border-radius: 5px;
   color: #77746e;
+  background: transparent;
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
   transform: translateX(-50%);
+  -webkit-app-region: no-drag;
+  cursor: pointer;
+}
+
+.document-title:hover,
+.document-title:focus-visible {
+  color: #4f665f;
+  background: var(--accent-soft);
+  outline: none;
+}
+
+.document-extension {
+  color: #aaa7a1;
+  user-select: none;
+}
+
+.document-name-input {
+  display: none;
+  width: 80px;
+  min-width: 44px;
+  max-width: 280px;
+  padding: 1px 3px;
+  border: 0;
+  border-bottom: 1px solid #8da49c;
+  outline: none;
+  color: #3e554e;
+  background: transparent;
+  font: inherit;
+  text-align: right;
+}
+
+.document-title.editing {
+  color: #4f665f;
+  background: var(--accent-soft);
+  cursor: text;
+}
+
+.document-title.editing #document-name {
+  display: none;
+}
+
+.document-title.editing .document-name-input {
+  display: inline-block;
 }
 
 .toolbar {
@@ -102,6 +151,14 @@ button {
 
 .right-actions {
   justify-content: flex-end;
+}
+
+.right-actions::before {
+  width: 1px;
+  height: 18px;
+  margin: 0 5px;
+  background: var(--line-strong);
+  content: "";
 }
 
 .icon-button,
@@ -167,6 +224,9 @@ button {
 
 .text-button.active {
   color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px rgba(81, 109, 100, 0.14);
+  font-weight: 600;
 }
 
 .workspace {
@@ -199,6 +259,109 @@ button {
   position: relative;
 }
 
+.editor-pane.nowrap {
+  overflow-x: auto;
+}
+
+.editor-pane.nowrap::-webkit-scrollbar {
+  height: 12px;
+}
+
+.editor-pane.nowrap::-webkit-scrollbar-track {
+  border-top: 1px solid var(--line);
+  background: #f5f5f2;
+}
+
+.editor-pane.nowrap::-webkit-scrollbar-thumb {
+  border: 3px solid #f5f5f2;
+  border-radius: 999px;
+  background: #b9b8b2;
+}
+
+.editor-pane.nowrap::-webkit-scrollbar-thumb:hover {
+  background: #98968f;
+}
+
+.editor-highlight {
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  left: 50%;
+  width: min(100%, 920px);
+  min-height: 100%;
+  margin: 0;
+  padding: 48px 58px 28vh;
+  overflow: hidden;
+  color: #343431;
+  background: var(--paper);
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, "Microsoft YaHei UI", monospace;
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.82;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.editor-highlight code {
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  white-space: inherit;
+}
+
+.editor-highlight .hljs-section,
+.editor-highlight .hljs-name,
+.editor-highlight .hljs-keyword,
+.editor-highlight .hljs-selector-tag {
+  color: #42685d;
+}
+
+.editor-highlight .hljs-strong {
+  color: #343431;
+}
+
+.editor-highlight .hljs-emphasis {
+  color: #5f5c57;
+}
+
+.editor-highlight [class^="hljs-"],
+.editor-highlight [class*=" hljs-"] {
+  font-style: inherit;
+  font-weight: inherit;
+}
+
+.editor-highlight .hljs-code,
+.editor-highlight .hljs-string,
+.editor-highlight .hljs-formula,
+.editor-highlight .hljs-template-variable {
+  color: #8a5742;
+}
+
+.editor-highlight .hljs-link,
+.editor-highlight .hljs-attr,
+.editor-highlight .hljs-symbol,
+.editor-highlight .hljs-bullet {
+  color: #476f82;
+}
+
+.editor-highlight .hljs-quote,
+.editor-highlight .hljs-comment,
+.editor-highlight .hljs-meta {
+  color: #8b8983;
+}
+
+.editor-pane.composing .editor-highlight {
+  visibility: hidden;
+}
+
+.editor-pane.composing #editor {
+  color: #343431;
+  -webkit-text-fill-color: #343431;
+}
+
 .editor-mirror {
   position: absolute;
   top: 0;
@@ -216,9 +379,15 @@ button {
   scrollbar-width: none;
 }
 
-.workspace.mode-split .editor-pane::-webkit-scrollbar,
 .workspace.mode-split .preview-pane::-webkit-scrollbar {
   display: none;
+}
+
+/* Split view keeps its shared vertical scrollbar, but long unwrapped source
+ * still needs a local horizontal scrollbar. */
+.workspace.mode-split .editor-pane.nowrap {
+  overflow-x: auto;
+  scrollbar-width: auto;
 }
 
 .workspace.mode-edit .preview-pane,
@@ -253,6 +422,8 @@ button {
 }
 
 #editor {
+  position: relative;
+  z-index: 1;
   width: min(100%, 920px);
   min-height: 100%;
   display: block;
@@ -262,23 +433,43 @@ button {
   overflow: hidden;
   border: 0;
   outline: none;
-  color: #343431;
-  background: var(--paper);
+  color: transparent;
+  background: transparent;
   caret-color: var(--accent);
+  -webkit-text-fill-color: transparent;
   font-family: "Cascadia Code", "SFMono-Regular", Consolas, "Microsoft YaHei UI", monospace;
   font-size: 15px;
   line-height: 1.82;
   tab-size: 2;
 }
 
+#editor::selection {
+  color: #243d36;
+  background: #cfded8;
+  -webkit-text-fill-color: #243d36;
+}
+
 #editor.nowrap {
   width: max-content;
   min-width: 100%;
   max-width: none;
+  margin-left: 0;
+  margin-right: 0;
   white-space: pre;
 }
 
-.mode-split #editor {
+.editor-highlight.nowrap {
+  width: max-content;
+  min-width: 100%;
+  max-width: none;
+  left: 0;
+  margin: 0;
+  white-space: pre;
+  transform: none;
+}
+
+.mode-split #editor,
+.mode-split .editor-highlight {
   padding: 38px 42px 28vh;
 }
 
@@ -460,6 +651,116 @@ button {
   transform: translate(-50%, 0);
 }
 
+.file-name-dialog {
+  width: min(390px, calc(100vw - 40px));
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  color: var(--text);
+  background: var(--paper);
+  box-shadow: 0 18px 60px rgba(36, 36, 32, 0.2);
+}
+
+.file-name-dialog::backdrop {
+  background: rgba(34, 34, 31, 0.22);
+  backdrop-filter: blur(1px);
+}
+
+.file-name-dialog form {
+  padding: 22px;
+}
+
+.file-name-dialog h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.file-name-field {
+  display: flex;
+  align-items: center;
+  margin-top: 16px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.file-name-field:focus-within {
+  border-color: #93aaa2;
+  box-shadow: 0 0 0 3px rgba(81, 109, 100, 0.1);
+}
+
+#file-name-input {
+  min-width: 0;
+  flex: 1;
+  padding: 9px 10px;
+  border: 0;
+  outline: 0;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+}
+
+.file-name-extension {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border-left: 1px solid var(--line);
+  color: #77746e;
+  background: #f4f5f2;
+  font-family: "Cascadia Code", Consolas, monospace;
+  user-select: none;
+}
+
+.file-name-error {
+  min-height: 18px;
+  margin: 7px 0 4px;
+  color: #a64a4a;
+  font-size: 12px;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.dialog-button {
+  min-width: 66px;
+  padding: 7px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.dialog-button:hover {
+  background: #f3f3f0;
+}
+
+.dialog-button.primary {
+  border-color: #516d64;
+  color: #fff;
+  background: #516d64;
+}
+
+.dialog-button.primary:hover {
+  background: #435e55;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 @media (max-width: 820px) {
   .brand span,
   .right-actions {
@@ -476,7 +777,54 @@ button {
   }
 
   #editor,
+  .editor-highlight,
   .markdown-body {
     padding-inline: 30px;
+  }
+}
+
+@media print {
+  :root {
+    --paper: #ffffff;
+  }
+
+  html,
+  body {
+    width: auto;
+    height: auto;
+    overflow: visible;
+    background: #ffffff;
+  }
+
+  .titlebar,
+  .toolbar,
+  .editor-pane,
+  .divider,
+  .master-scrollbar,
+  .statusbar,
+  .toast {
+    display: none !important;
+  }
+
+  .workspace,
+  .workspace.mode-edit,
+  .workspace.mode-split,
+  .workspace.mode-read {
+    display: block;
+    height: auto;
+    overflow: visible;
+  }
+
+  .workspace .preview-pane {
+    display: block !important;
+    height: auto;
+    overflow: visible;
+  }
+
+  .markdown-body,
+  .mode-split .markdown-body {
+    width: auto;
+    min-height: 0;
+    padding: 0;
   }
 }

@@ -2,6 +2,7 @@ const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { fileURLToPath, pathToFileURL } = require('node:url');
+const { buildStandaloneHtml } = require('./export-document');
 
 let mainWindow;
 let isDirty = false;
@@ -63,6 +64,36 @@ async function getUntitledSavePath() {
   }
 }
 
+const windowsReservedNames = new Set([
+  'CON', 'PRN', 'AUX', 'NUL',
+  ...Array.from({ length: 9 }, (_, index) => `COM${index + 1}`),
+  ...Array.from({ length: 9 }, (_, index) => `LPT${index + 1}`)
+]);
+
+function validateDocumentBaseName(value) {
+  if (typeof value !== 'string') return '请输入文件名。';
+  const name = value.trim();
+  if (!name) return '请输入文件名。';
+  if (name !== value || /[<>:"/\\|?*\u0000-\u001f]/.test(name)) return '文件名包含 Windows 不允许的字符。';
+  if (/[.\s]$/.test(name)) return '文件名不能以句点或空格结尾。';
+  if (windowsReservedNames.has(name.split('.')[0].toUpperCase())) return '该名称是 Windows 保留名称。';
+  return null;
+}
+
+function buildFileName(baseName, extension) {
+  const error = validateDocumentBaseName(baseName);
+  if (error) throw new Error(error);
+  return `${baseName}${extension}`;
+}
+
+function getUntitledNamedFileName(fileName) {
+  if (typeof fileName !== 'string') throw new Error('请输入文件名。');
+  const trimmed = fileName.trim();
+  const extension = path.extname(trimmed);
+  if (extension && extension.toLowerCase() !== '.md') throw new Error('未命名文档只能保存为 .md 文件。');
+  return buildFileName(extension ? trimmed.slice(0, -extension.length) : trimmed, '.md');
+}
+
 function resolveLocalResource(filePath, href) {
   if (typeof href !== 'string' || !href || /\0/.test(href)) return null;
   let candidate;
@@ -86,6 +117,42 @@ const documentFilters = [
   { name: 'Markdown / TeX', extensions: ['md', 'markdown', 'mdown', 'mkd', 'tex', 'txt'] },
   { name: 'All files', extensions: ['*'] }
 ];
+
+const imageMimeTypes = new Map([
+  ['.avif', 'image/avif'],
+  ['.bmp', 'image/bmp'],
+  ['.gif', 'image/gif'],
+  ['.ico', 'image/x-icon'],
+  ['.jpeg', 'image/jpeg'],
+  ['.jpg', 'image/jpeg'],
+  ['.png', 'image/png'],
+  ['.svg', 'image/svg+xml'],
+  ['.webp', 'image/webp']
+]);
+
+function getExportBaseName(title) {
+  const baseName = path.parse(typeof title === 'string' ? title : '').name || 'Mori 文档';
+  return baseName.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_');
+}
+
+function isValidExportPayload(payload) {
+  return payload && typeof payload.html === 'string' && typeof payload.title === 'string';
+}
+
+async function waitForExportResources(window) {
+  await window.webContents.executeJavaScript(`Promise.race([
+    Promise.all([
+      document.fonts.ready,
+      ...Array.from(document.images, (image) => image.complete
+        ? Promise.resolve()
+        : new Promise((resolve) => {
+            image.addEventListener('load', resolve, { once: true });
+            image.addEventListener('error', resolve, { once: true });
+          }))
+    ]),
+    new Promise((resolve) => setTimeout(resolve, 5000))
+  ])`);
+}
 
 async function findDocumentPath(argv, workingDirectory = process.cwd()) {
   for (const argument of argv.slice(1)) {
@@ -244,11 +311,26 @@ function createWindow() {
           const fence = String.fromCharCode(96).repeat(3);
           editor.value = fence + 'javascript\\nconst answer = 42;\\n' + fence + '\\n\\n[OpenAI](https://openai.com)\\n\\n![image](https://example.com/image.png)';
           editor.dispatchEvent(new Event('input', { bubbles: true }));
-          window.__moriMarkdownFeatureTest = () => ({
-            highlighted: Boolean(document.querySelector('pre code.hljs')),
-            link: document.querySelector('#preview a')?.getAttribute('href'),
-            image: document.querySelector('#preview img')?.getAttribute('src')
-          });
+          window.__moriMarkdownFeatureTest = () => {
+            document.querySelector('#document-title')?.click();
+            const titleEditor = document.querySelector('#document-name-input');
+            const inlineRename = document.querySelector('#document-title')?.classList.contains('editing') &&
+              document.querySelector('#document-extension')?.textContent === '.md' &&
+              document.activeElement === titleEditor;
+            titleEditor?.dispatchEvent(new KeyboardEvent('keydown', {
+              bubbles: true,
+              cancelable: true,
+              key: 'Escape'
+            }));
+            return {
+              highlighted: Boolean(document.querySelector('pre code.hljs')),
+              sourceHighlighted: Boolean(document.querySelector('#editor-highlight [class*="hljs-"]')),
+              link: document.querySelector('#preview a')?.getAttribute('href'),
+              image: document.querySelector('#preview img')?.getAttribute('src'),
+              wrapActive: document.querySelector('#wrap-button')?.getAttribute('aria-pressed') === 'true',
+              inlineRename
+            };
+          };
         })()`
       );
       await new Promise((resolve) => setTimeout(resolve, 180));
@@ -256,9 +338,48 @@ function createWindow() {
         'window.__moriMarkdownFeatureTest()'
       );
       console.log(`Smoke markdown features: ${JSON.stringify(markdownFeatureResult)}`);
-      if (!markdownFeatureResult.highlighted || !/^https:\/\//.test(markdownFeatureResult.link) ||
+      if (!markdownFeatureResult.highlighted || !markdownFeatureResult.sourceHighlighted ||
+        !markdownFeatureResult.wrapActive || !markdownFeatureResult.inlineRename ||
+        !/^https:\/\//.test(markdownFeatureResult.link) ||
         !/^https:\/\//.test(markdownFeatureResult.image)) {
         console.error('Markdown highlight, link, or image smoke test failed');
+        isQuitting = true;
+        app.exit(1);
+        return;
+      }
+      await mainWindow.webContents.executeJavaScript(
+        `(() => {
+          const editor = document.querySelector('#editor');
+          window.__moriBeforeHorizontalSmoke = editor.value;
+          editor.value += '\\n' + 'long-line-'.repeat(120);
+          editor.dispatchEvent(new Event('input', { bubbles: true }));
+          document.querySelector('#wrap-button')?.click();
+          document.querySelector('[data-mode="split"]')?.click();
+        })()`
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const horizontalScrollResult = await mainWindow.webContents.executeJavaScript(
+        `(() => {
+          const pane = document.querySelector('.editor-pane');
+          const editor = document.querySelector('#editor');
+          const highlight = document.querySelector('#editor-highlight');
+          pane.scrollLeft = 120;
+          const result = {
+            overflow: getComputedStyle(pane).overflowX,
+            scrollable: pane.scrollWidth > pane.clientWidth && pane.scrollLeft > 0,
+            layersAligned: Math.abs(editor.offsetWidth - highlight.offsetWidth) < 1
+          };
+          editor.value = window.__moriBeforeHorizontalSmoke;
+          editor.dispatchEvent(new Event('input', { bubbles: true }));
+          document.querySelector('#wrap-button')?.click();
+          document.querySelector('[data-mode="edit"]')?.click();
+          return result;
+        })()`
+      );
+      console.log(`Smoke horizontal source scroll: ${JSON.stringify(horizontalScrollResult)}`);
+      if (horizontalScrollResult.overflow !== 'auto' || !horizontalScrollResult.scrollable ||
+        !horizontalScrollResult.layersAligned) {
+        console.error('Unwrapped source horizontal scrolling failed');
         isQuitting = true;
         app.exit(1);
         return;
@@ -429,12 +550,27 @@ ipcMain.handle('document:open', async () => {
 });
 
 ipcMain.handle('document:save', async (_event, payload) => {
-  let filePath = payload.filePath;
+  const request = payload && typeof payload === 'object' ? payload : {};
+  let filePath = request.filePath;
+  let exclusiveCreate = false;
 
-  if (!filePath || payload.saveAs) {
-    if (!payload.saveAs) {
+  if (!filePath || request.saveAs) {
+    if (!request.saveAs) {
       try {
-        filePath = await getUntitledSavePath();
+        if (request.fileName != null) {
+          const directory = getRepositoryDirectory();
+          await fs.mkdir(directory, { recursive: true });
+          filePath = path.join(directory, getUntitledNamedFileName(request.fileName));
+          exclusiveCreate = true;
+          try {
+            await fs.access(filePath);
+            return { canceled: true, error: 'Mori Repository 中已存在同名文件。' };
+          } catch (error) {
+            if (error.code !== 'ENOENT') throw error;
+          }
+        } else {
+          filePath = await getUntitledSavePath();
+        }
       } catch (error) {
         dialog.showErrorBox('无法保存文件', error.message);
         return { canceled: true, error: error.message };
@@ -442,7 +578,7 @@ ipcMain.handle('document:save', async (_event, payload) => {
     } else {
       const result = await dialog.showSaveDialog(mainWindow, {
         title: '保存文档',
-        defaultPath: filePath || '未命名.md',
+        defaultPath: filePath || request.fileName || '未命名.md',
         filters: documentFilters
       });
       if (result.canceled || !result.filePath) return { canceled: true };
@@ -451,12 +587,113 @@ ipcMain.handle('document:save', async (_event, payload) => {
   }
 
   try {
-    await fs.writeFile(filePath, payload.content, 'utf8');
+    await fs.writeFile(
+      filePath,
+      request.content,
+      exclusiveCreate ? { encoding: 'utf8', flag: 'wx' } : 'utf8'
+    );
     isDirty = false;
     return { canceled: false, filePath, name: path.basename(filePath) };
   } catch (error) {
+    if (exclusiveCreate && error.code === 'EEXIST') {
+      return { canceled: true, error: 'Mori Repository 中已存在同名文件。' };
+    }
     await dialog.showErrorBox('无法保存文件', error.message);
     return { canceled: true, error: error.message };
+  }
+});
+
+ipcMain.handle('document:rename', async (_event, payload) => {
+  const request = payload && typeof payload === 'object' ? payload : {};
+  if (typeof request.filePath !== 'string' || !request.filePath) {
+    return { canceled: true, error: '当前文档尚未保存。' };
+  }
+  try {
+    const sourcePath = path.resolve(request.filePath);
+    const stats = await fs.stat(sourcePath);
+    if (!stats.isFile()) throw new Error('当前路径不是文件。');
+    const targetPath = path.join(
+      path.dirname(sourcePath),
+      buildFileName(request.baseName, path.extname(sourcePath))
+    );
+    if (targetPath === sourcePath) return { canceled: false, filePath: sourcePath, name: path.basename(sourcePath) };
+    const isCaseOnlyRename = targetPath.toLowerCase() === sourcePath.toLowerCase();
+    if (!isCaseOnlyRename) {
+      try {
+        await fs.access(targetPath);
+        return { canceled: true, error: '当前文件夹中已存在同名文件。' };
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+    }
+    await fs.rename(sourcePath, targetPath);
+    return { canceled: false, filePath: targetPath, name: path.basename(targetPath) };
+  } catch (error) {
+    return { canceled: true, error: error.message };
+  }
+});
+
+ipcMain.handle('document:export-html', async (_event, payload) => {
+  if (!isValidExportPayload(payload)) return { canceled: true, error: '无效的导出内容' };
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: '导出为 HTML',
+    defaultPath: `${getExportBaseName(payload.title)}.html`,
+    filters: [{ name: 'HTML 文档', extensions: ['html', 'htm'] }]
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+
+  try {
+    const document = await buildStandaloneHtml(payload, path.join(__dirname, '..'));
+    await fs.writeFile(result.filePath, document, 'utf8');
+    return { canceled: false, filePath: result.filePath };
+  } catch (error) {
+    dialog.showErrorBox('无法导出 HTML', error.message);
+    return { canceled: true, error: error.message };
+  }
+});
+
+ipcMain.handle('document:export-pdf', async (_event, payload) => {
+  if (!isValidExportPayload(payload)) return { canceled: true, error: '无效的导出内容' };
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: '导出为 PDF',
+    defaultPath: `${getExportBaseName(payload.title)}.pdf`,
+    filters: [{ name: 'PDF 文档', extensions: ['pdf'] }]
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+
+  let exportWindow;
+  let temporaryDirectory;
+  let temporaryFile;
+  try {
+    const document = await buildStandaloneHtml(payload, path.join(__dirname, '..'));
+    temporaryDirectory = await fs.mkdtemp(path.join(app.getPath('temp'), 'mori-export-'));
+    temporaryFile = path.join(temporaryDirectory, 'document.html');
+    await fs.writeFile(temporaryFile, document, 'utf8');
+
+    exportWindow = new BrowserWindow({
+      show: false,
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true
+      }
+    });
+    await exportWindow.loadFile(temporaryFile);
+    await waitForExportResources(exportWindow);
+    const pdf = await exportWindow.webContents.printToPDF({
+      pageSize: 'A4',
+      printBackground: true,
+      preferCSSPageSize: true
+    });
+    await fs.writeFile(result.filePath, pdf);
+    return { canceled: false, filePath: result.filePath };
+  } catch (error) {
+    dialog.showErrorBox('无法导出 PDF', error.message);
+    return { canceled: true, error: error.message };
+  } finally {
+    if (exportWindow && !exportWindow.isDestroyed()) exportWindow.destroy();
+    if (temporaryFile) await fs.unlink(temporaryFile).catch(() => {});
+    if (temporaryDirectory) await fs.rmdir(temporaryDirectory).catch(() => {});
   }
 });
 
@@ -489,6 +726,22 @@ ipcMain.handle('resource:resolve', async (_event, { href, filePath }) => {
     return (await fs.stat(resourcePath)).isFile()
       ? pathToFileURL(resourcePath).href
       : null;
+  } catch {
+    return null;
+  }
+});
+
+ipcMain.handle('resource:embed', async (_event, { href, filePath }) => {
+  if (/^data:image\//i.test(href)) return href;
+  const resourcePath = resolveLocalResource(filePath, href);
+  if (!resourcePath) return null;
+  const mimeType = imageMimeTypes.get(path.extname(resourcePath).toLowerCase());
+  if (!mimeType) return null;
+  try {
+    const stats = await fs.stat(resourcePath);
+    if (!stats.isFile()) return null;
+    const content = await fs.readFile(resourcePath);
+    return `data:${mimeType};base64,${content.toString('base64')}`;
   } catch {
     return null;
   }

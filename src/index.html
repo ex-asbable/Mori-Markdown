@@ -20,7 +20,11 @@
         </svg>
         <span>Mori</span>
       </div>
-      <div id="document-title" class="document-title">未命名</div>
+      <div id="document-title" class="document-title" role="button" tabindex="0" title="点击重命名">
+        <span id="document-name">未命名</span>
+        <input id="document-name-input" class="document-name-input" type="text" maxlength="180" aria-label="文件名" spellcheck="false" />
+        <span id="document-extension" class="document-extension">.md</span>
+      </div>
     </header>
 
     <nav class="toolbar" aria-label="文档工具栏">
@@ -46,12 +50,15 @@
       </div>
 
       <div class="toolbar-group right-actions">
-        <button id="wrap-button" class="text-button active" title="切换自动换行">换行</button>
+        <button id="export-html-button" class="text-button export-button" title="导出为 HTML">HTML</button>
+        <button id="export-pdf-button" class="text-button export-button" title="导出为 PDF">PDF</button>
+        <button id="wrap-button" class="text-button active" title="切换自动换行" aria-pressed="true">换行</button>
       </div>
     </nav>
 
     <main id="workspace" class="workspace mode-edit">
       <section class="editor-pane" aria-label="Markdown 编辑器">
+        <pre id="editor-highlight" class="editor-highlight" aria-hidden="true"><code></code></pre>
         <textarea id="editor" spellcheck="false" aria-label="Markdown 文本"></textarea>
         <div id="editor-mirror" class="editor-mirror" aria-hidden="true"></div>
       </section>
@@ -77,10 +84,27 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+    <dialog id="file-name-dialog" class="file-name-dialog">
+      <form id="file-name-form">
+        <h2 id="file-name-dialog-title">重命名文档</h2>
+        <label class="file-name-field">
+          <span class="sr-only">文件名</span>
+          <input id="file-name-input" type="text" maxlength="180" autocomplete="off" spellcheck="false" />
+          <span id="file-name-extension" class="file-name-extension">.md</span>
+        </label>
+        <p id="file-name-error" class="file-name-error" role="alert"></p>
+        <div class="dialog-actions">
+          <button id="file-name-cancel" type="button" class="dialog-button">取消</button>
+          <button id="file-name-confirm" type="submit" class="dialog-button primary">重命名</button>
+        </div>
+      </form>
+    </dialog>
+
     <script src="../node_modules/marked/lib/marked.umd.js"></script>
     <script src="../node_modules/dompurify/dist/purify.min.js"></script>
     <script src="../node_modules/katex/dist/katex.min.js"></script>
     <script src="../node_modules/@highlightjs/cdn-assets/highlight.min.js"></script>
+    <script src="../node_modules/@highlightjs/cdn-assets/languages/latex.min.js"></script>
     <script src="./undo-history.js"></script>
     <script src="./renderer.js"></script>
   </body>

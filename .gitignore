@@ -2,6 +2,7 @@ node_modules/
 release/
 dist/
 artifacts/
+Mori Repository/
 *.log
 .DS_Store
 Thumbs.db
