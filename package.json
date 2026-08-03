@@ -1,13 +1,13 @@
 {
   "name": "mori-markdown",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "A lightweight Markdown and TeX editor for Windows",
   "main": "src/main.js",
   "author": "ex-asbable",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "check": "node --check src/main.js && node --check src/preload.js && node --check src/export-document.js && node --check src/undo-history.js && node --check src/renderer.js",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/export-document.js && node --check src/undo-history.js && node --check src/update-check.js && node --check src/renderer.js",
     "test": "node --test test/*.test.js",
     "smoke": "electron . --smoke",
     "dist": "electron-builder --win nsis portable"

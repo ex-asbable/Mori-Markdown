@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { fileURLToPath, pathToFileURL } = require('node:url');
 const { buildStandaloneHtml } = require('./export-document');
+const { fetchLatestRelease } = require('./update-check');
 
 let mainWindow;
 let isDirty = false;
@@ -11,11 +12,56 @@ let pendingDocumentPath = null;
 let lastOpenedDocumentPath = null;
 let rendererReady = false;
 let sessionWrite = Promise.resolve();
+let themePreferenceWrite = Promise.resolve();
 let isClosing = false;
+let updateCheck;
+let currentTheme = 'light';
 const isSmokeMode = process.argv.includes('--smoke');
+
+const themeColors = {
+  light: { background: '#fbfbfa', symbols: '#5a5a57' },
+  dark: { background: '#1d201e', symbols: '#d0d2cd' }
+};
 
 function getSessionPath() {
   return path.join(app.getPath('userData'), 'session.json');
+}
+
+function getPreferencesPath() {
+  return path.join(app.getPath('userData'), 'preferences.json');
+}
+
+async function loadThemePreference() {
+  try {
+    const preferences = JSON.parse(await fs.readFile(getPreferencesPath(), 'utf8'));
+    return preferences?.theme === 'dark' ? 'dark' : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
+function saveThemePreference(theme) {
+  if (isSmokeMode) return Promise.resolve();
+  themePreferenceWrite = themePreferenceWrite.then(async () => {
+    const preferencesPath = getPreferencesPath();
+    await fs.mkdir(path.dirname(preferencesPath), { recursive: true });
+    const temporaryPath = `${preferencesPath}.tmp`;
+    await fs.writeFile(temporaryPath, JSON.stringify({ theme }), 'utf8');
+    await fs.rename(temporaryPath, preferencesPath);
+  }).catch((error) => console.error('Unable to save preferences:', error));
+  return themePreferenceWrite;
+}
+
+function applyWindowTheme(theme) {
+  currentTheme = theme === 'dark' ? 'dark' : 'light';
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const colors = themeColors[currentTheme];
+  mainWindow.setBackgroundColor(colors.background);
+  mainWindow.setTitleBarOverlay({
+    color: colors.background,
+    symbolColor: colors.symbols,
+    height: 42
+  });
 }
 
 async function loadSession() {
@@ -198,25 +244,27 @@ async function openDocumentPath(filePath) {
 
 function createWindow() {
   rendererReady = false;
+  const initialThemeColors = themeColors[currentTheme];
   mainWindow = new BrowserWindow({
     width: 1180,
     height: 780,
     minWidth: 760,
     minHeight: 520,
-    backgroundColor: '#fbfbfa',
+    backgroundColor: initialThemeColors.background,
     show: false,
     title: 'Mori Markdown',
     titleBarStyle: 'hidden',
     titleBarOverlay: {
-      color: '#fbfbfa',
-      symbolColor: '#5a5a57',
+      color: initialThemeColors.background,
+      symbolColor: initialThemeColors.symbols,
       height: 42
     },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      additionalArguments: [`--mori-theme=${currentTheme}`]
     }
   });
 
@@ -224,6 +272,14 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
   mainWindow.webContents.once('did-finish-load', () => {
     rendererReady = true;
+    if (!isSmokeMode) {
+      updateCheck ||= fetchLatestRelease({ currentVersion: app.getVersion() });
+      updateCheck.then((release) => {
+        if (release && mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('app:update-available', release);
+        }
+      }).catch(() => {});
+    }
     if (!pendingDocumentPath) return;
     const filePath = pendingDocumentPath;
     pendingDocumentPath = null;
@@ -309,7 +365,7 @@ function createWindow() {
         `(() => {
           const editor = document.querySelector('#editor');
           const fence = String.fromCharCode(96).repeat(3);
-          editor.value = fence + 'javascript\\nconst answer = 42;\\n' + fence + '\\n\\n[OpenAI](https://openai.com)\\n\\n![image](https://example.com/image.png)';
+          editor.value = fence + 'javascript\\nconst answer = 42;\\n' + fence + '\\n\\n[OpenAI](https://openai.com)\\n\\n![image](https://example.com/image.png)\\n\\n$\\\\sqrt{x}\\\\quad\\\\overbrace{x+y}$';
           editor.dispatchEvent(new Event('input', { bubbles: true }));
           window.__moriMarkdownFeatureTest = () => {
             document.querySelector('#document-title')?.click();
@@ -322,11 +378,25 @@ function createWindow() {
               cancelable: true,
               key: 'Escape'
             }));
+            const themeButton = document.querySelector('#theme-button');
+            const initialTheme = document.documentElement.dataset.theme;
+            themeButton?.click();
+            const changedTheme = document.documentElement.dataset.theme;
+            const themeToggleWorked = changedTheme !== initialTheme &&
+              themeButton.getAttribute('aria-pressed') === String(changedTheme === 'dark') &&
+              document.querySelector('#highlight-theme-light').disabled === (changedTheme === 'dark') &&
+              document.querySelector('#highlight-theme-dark').disabled === (changedTheme !== 'dark');
+            themeButton?.click();
             return {
               highlighted: Boolean(document.querySelector('pre code.hljs')),
               sourceHighlighted: Boolean(document.querySelector('#editor-highlight [class*="hljs-"]')),
+              rendererReady: document.documentElement.classList.contains('highlight-ready'),
+              themeToggleWorked,
               link: document.querySelector('#preview a')?.getAttribute('href'),
               image: document.querySelector('#preview img')?.getAttribute('src'),
+              radicalSvg: Boolean(document.querySelector('#preview .katex .sqrt svg path')),
+              stretchySvg: Boolean(document.querySelector('#preview .katex .stretchy svg path')),
+              mathMl: Boolean(document.querySelector('#preview .katex math')),
               wrapActive: document.querySelector('#wrap-button')?.getAttribute('aria-pressed') === 'true',
               inlineRename
             };
@@ -339,10 +409,13 @@ function createWindow() {
       );
       console.log(`Smoke markdown features: ${JSON.stringify(markdownFeatureResult)}`);
       if (!markdownFeatureResult.highlighted || !markdownFeatureResult.sourceHighlighted ||
+        !markdownFeatureResult.rendererReady || !markdownFeatureResult.themeToggleWorked ||
+        !markdownFeatureResult.radicalSvg || !markdownFeatureResult.stretchySvg ||
+        !markdownFeatureResult.mathMl ||
         !markdownFeatureResult.wrapActive || !markdownFeatureResult.inlineRename ||
         !/^https:\/\//.test(markdownFeatureResult.link) ||
         !/^https:\/\//.test(markdownFeatureResult.image)) {
-        console.error('Markdown highlight, link, or image smoke test failed');
+        console.error('Markdown highlight, math, link, or image smoke test failed');
         isQuitting = true;
         app.exit(1);
         return;
@@ -491,10 +564,10 @@ function createWindow() {
     isClosing = true;
     mainWindow.webContents.executeJavaScript('window.__moriGetSession?.()')
       .then((session) => {
-        if (session?.content != null) return saveSession(session);
-        return sessionWrite;
+        const latestSessionWrite = session?.content != null ? saveSession(session) : sessionWrite;
+        return Promise.all([latestSessionWrite, themePreferenceWrite]);
       })
-      .catch(() => sessionWrite)
+      .catch(() => Promise.all([sessionWrite, themePreferenceWrite]))
       .finally(() => {
         isQuitting = true;
         mainWindow?.close();
@@ -701,6 +774,12 @@ ipcMain.on('document:set-dirty', (_event, value) => {
   isDirty = Boolean(value);
 });
 
+ipcMain.on('app:set-theme', (_event, theme) => {
+  if (theme !== 'light' && theme !== 'dark') return;
+  applyWindowTheme(theme);
+  saveThemePreference(theme);
+});
+
 ipcMain.handle('session:load', () => {
   if (isSmokeMode || pendingDocumentPath || lastOpenedDocumentPath) return null;
   return loadSession();
@@ -778,6 +857,7 @@ if (!hasSingleInstanceLock) {
   });
 
   app.whenReady().then(async () => {
+    currentTheme = await loadThemePreference();
     pendingDocumentPath = pendingDocumentPath || await findDocumentPath(process.argv);
     createWindow();
     app.on('activate', () => {

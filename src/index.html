@@ -9,7 +9,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Mori Markdown</title>
     <link rel="stylesheet" href="../node_modules/katex/dist/katex.min.css" />
-    <link rel="stylesheet" href="../node_modules/@highlightjs/cdn-assets/styles/github.min.css" />
+    <link id="highlight-theme-light" rel="stylesheet" href="../node_modules/@highlightjs/cdn-assets/styles/github.min.css" />
+    <link id="highlight-theme-dark" rel="stylesheet" href="../node_modules/@highlightjs/cdn-assets/styles/github-dark.min.css" disabled />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -50,6 +51,7 @@
       </div>
 
       <div class="toolbar-group right-actions">
+        <button id="theme-button" class="text-button" title="切换深色模式" aria-label="深色模式" aria-pressed="false">深色</button>
         <button id="export-html-button" class="text-button export-button" title="导出为 HTML">HTML</button>
         <button id="export-pdf-button" class="text-button export-button" title="导出为 PDF">PDF</button>
         <button id="wrap-button" class="text-button active" title="切换自动换行" aria-pressed="true">换行</button>

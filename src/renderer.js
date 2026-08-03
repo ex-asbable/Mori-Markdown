@@ -24,6 +24,13 @@ const fileNameExtension = document.querySelector('#file-name-extension');
 const fileNameError = document.querySelector('#file-name-error');
 const fileNameCancel = document.querySelector('#file-name-cancel');
 const fileNameConfirm = document.querySelector('#file-name-confirm');
+const themeButton = document.querySelector('#theme-button');
+const highlightThemeLight = document.querySelector('#highlight-theme-light');
+const highlightThemeDark = document.querySelector('#highlight-theme-dark');
+
+function loadTheme() {
+  return window.desktop.initialTheme === 'dark' ? 'dark' : 'light';
+}
 
 const initialContent = String.raw`# 欢迎使用 Mori
 
@@ -53,6 +60,7 @@ const state = {
   dirty: false,
   mode: 'edit',
   wrap: true,
+  theme: loadTheme(),
   syncingScroll: false,
   scrollAnchors: [],
   renderTimer: null,
@@ -61,6 +69,21 @@ const state = {
   toastTimer: null,
   sessionReady: false
 };
+
+function setTheme(theme, persist = true) {
+  state.theme = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = state.theme;
+  const isDark = state.theme === 'dark';
+  themeButton.classList.toggle('active', isDark);
+  themeButton.setAttribute('aria-pressed', String(isDark));
+  themeButton.setAttribute('aria-label', isDark ? '关闭深色模式' : '开启深色模式');
+  themeButton.title = isDark ? '切换浅色模式' : '切换深色模式';
+  highlightThemeLight.disabled = isDark;
+  highlightThemeDark.disabled = !isDark;
+  if (persist) window.desktop.setTheme(state.theme);
+}
+
+setTheme(state.theme, false);
 
 const undoHistory = new window.MoriUndoHistory({ limit: 200, mergeDelay: 1000 });
 let pendingBeforeInput = null;
@@ -222,6 +245,7 @@ function updateEditorHighlight() {
     editorHighlightCode.textContent = source + (source.endsWith('\n') ? ' ' : '');
   }
   syncEditorHighlightGeometry();
+  document.documentElement.classList.add('highlight-ready');
 }
 
 function scheduleEditorHighlight() {
@@ -314,7 +338,11 @@ function renderPreviewWithAnchors(source) {
     const rendered = marked.parser(tokenList);
     const sanitized = DOMPurify.sanitize(rendered, {
       ADD_ATTR: ['class', 'aria-hidden', 'data-resource-src'],
-      USE_PROFILES: { html: true }
+      // KaTeX uses inline SVG paths for extensible glyphs such as radicals,
+      // braces and long arrows, and MathML for its accessible representation.
+      // The HTML-only profile silently removed those nodes after KaTeX had
+      // rendered them, leaving formulas such as \sqrt{x} visibly incomplete.
+      USE_PROFILES: { html: true, svg: true, svgFilters: true, mathMl: true }
     });
     const template = document.createElement('template');
     template.innerHTML = sanitized;
@@ -632,9 +660,28 @@ function updateStats() {
 
 function showToast(message) {
   window.clearTimeout(state.toastTimer);
+  toast.classList.remove('update-available');
+  toast.replaceChildren();
   toast.textContent = message;
   toast.classList.add('visible');
   state.toastTimer = window.setTimeout(() => toast.classList.remove('visible'), 1600);
+}
+
+function showUpdateNotice(release) {
+  if (!release || typeof release.version !== 'string' || typeof release.url !== 'string') return;
+  window.clearTimeout(state.toastTimer);
+  toast.replaceChildren(document.createTextNode(`发现新版本 ${release.version}`));
+
+  const openButton = document.createElement('button');
+  openButton.type = 'button';
+  openButton.textContent = '查看新版';
+  openButton.addEventListener('click', () => {
+    window.desktop.openExternal(release.url);
+    toast.classList.remove('visible');
+  });
+  toast.append(openButton);
+  toast.classList.add('visible', 'update-available');
+  state.toastTimer = window.setTimeout(() => toast.classList.remove('visible'), 12000);
 }
 
 function captureEditorSnapshot() {
@@ -991,6 +1038,9 @@ documentNameInput.addEventListener('keydown', (event) => {
 documentNameInput.addEventListener('blur', commitTitleEditing);
 document.querySelector('#export-html-button').addEventListener('click', () => exportDocument('html'));
 document.querySelector('#export-pdf-button').addEventListener('click', () => exportDocument('pdf'));
+themeButton.addEventListener('click', () => {
+  setTheme(state.theme === 'dark' ? 'light' : 'dark');
+});
 
 document.querySelectorAll('.mode-button').forEach((button) => {
   button.addEventListener('click', () => setMode(button.dataset.mode));
@@ -1043,6 +1093,8 @@ window.desktop.onOpenPath((document) => {
     showToast('文档已打开');
   });
 });
+
+window.desktop.onUpdateAvailable(showUpdateNotice);
 
 setContent(initialContent);
 
