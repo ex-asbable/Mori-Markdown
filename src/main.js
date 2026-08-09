@@ -1,5 +1,7 @@
 const { app, BrowserWindow, clipboard, dialog, ipcMain, shell } = require('electron');
+const fsSync = require('node:fs');
 const fs = require('node:fs/promises');
+const https = require('node:https');
 const path = require('node:path');
 const { fileURLToPath, pathToFileURL } = require('node:url');
 const { buildStandaloneHtml } = require('./export-document');
@@ -15,8 +17,88 @@ let sessionWrite = Promise.resolve();
 let themePreferenceWrite = Promise.resolve();
 let isClosing = false;
 let updateCheck;
+let availableUpdate = null;
+let updateDownload = null;
 let currentTheme = 'light';
 const isSmokeMode = process.argv.includes('--smoke');
+
+function downloadInstaller(url, destination, expectedSize, onProgress, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(url, {
+      headers: { 'User-Agent': `Mori-Markdown/${app.getVersion()}` }
+    }, (response) => {
+      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+        response.resume();
+        if (redirects >= 5) return reject(new Error('Too many installer download redirects'));
+        let nextUrl;
+        try {
+          nextUrl = new URL(response.headers.location, url);
+        } catch {
+          return reject(new Error('Invalid installer download redirect'));
+        }
+        if (nextUrl.protocol !== 'https:') return reject(new Error('Installer redirect was not HTTPS'));
+        return resolve(downloadInstaller(nextUrl, destination, expectedSize, onProgress, redirects + 1));
+      }
+      if (response.statusCode !== 200) {
+        response.resume();
+        return reject(new Error(`Installer download returned HTTP ${response.statusCode}`));
+      }
+
+      const contentLength = Number(response.headers['content-length']);
+      if (Number.isSafeInteger(contentLength) && contentLength !== expectedSize) {
+        response.resume();
+        return reject(new Error('Installer download size did not match the release asset'));
+      }
+
+      let received = 0;
+      const output = fsSync.createWriteStream(destination, { flags: 'w' });
+      response.on('data', (chunk) => {
+        received += chunk.length;
+        onProgress(received, expectedSize);
+      });
+      response.on('error', reject);
+      output.on('error', reject);
+      output.on('finish', () => {
+        output.close(() => {
+          if (received !== expectedSize) reject(new Error('Installer download size did not match the release asset'));
+          else resolve();
+        });
+      });
+      response.pipe(output);
+    });
+    request.setTimeout(30000, () => request.destroy(new Error('Installer download timed out')));
+    request.on('error', reject);
+  });
+}
+
+async function downloadAndInstallUpdate() {
+  if (!availableUpdate?.installer) return { error: 'No update installer is available' };
+  if (updateDownload) return { error: 'Update download is already in progress' };
+
+  const installerPath = path.join(app.getPath('temp'), availableUpdate.installer.name);
+  const partialPath = `${installerPath}.part`;
+  updateDownload = (async () => {
+    await fs.unlink(partialPath).catch(() => {});
+    await downloadInstaller(availableUpdate.installer.url, partialPath, availableUpdate.installer.size, (received, total) => {
+      mainWindow?.webContents.send('app:update-download-progress', { received, total });
+    });
+    await fs.rename(partialPath, installerPath);
+    const launchError = await shell.openPath(installerPath);
+    if (launchError) throw new Error(launchError);
+    isQuitting = true;
+    app.quit();
+  })();
+
+  try {
+    await updateDownload;
+    return { installing: true };
+  } catch (error) {
+    await fs.unlink(partialPath).catch(() => {});
+    return { error: error.message };
+  } finally {
+    updateDownload = null;
+  }
+}
 
 const themeColors = {
   light: { background: '#fbfbfa', symbols: '#5a5a57' },
@@ -276,6 +358,7 @@ function createWindow() {
       updateCheck ||= fetchLatestRelease({ currentVersion: app.getVersion() });
       updateCheck.then((release) => {
         if (release && mainWindow && !mainWindow.isDestroyed()) {
+          availableUpdate = release;
           mainWindow.webContents.send('app:update-available', release);
         }
       }).catch(() => {});
@@ -785,6 +868,8 @@ ipcMain.handle('clipboard:write-text', (_event, value) => {
   clipboard.writeText(value);
   return true;
 });
+
+ipcMain.handle('update:download-and-install', downloadAndInstallUpdate);
 
 ipcMain.handle('session:load', () => {
   if (isSmokeMode || pendingDocumentPath || lastOpenedDocumentPath) return null;

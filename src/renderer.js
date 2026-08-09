@@ -91,6 +91,7 @@ let compositionSnapshot = null;
 let isComposing = false;
 let isTitleEditing = false;
 let titleRenamePending = false;
+let updateButton = null;
 
 function splitDocumentName(fileName = state.fileName) {
   const normalized = fileName === '未命名' ? '未命名.md' : fileName;
@@ -695,20 +696,26 @@ function showToast(message) {
 }
 
 function showUpdateNotice(release) {
-  if (!release || typeof release.version !== 'string' || typeof release.url !== 'string') return;
+  if (!release || typeof release.version !== 'string' || !release.installer) return;
   window.clearTimeout(state.toastTimer);
   toast.replaceChildren(document.createTextNode(`发现新版本 ${release.version}`));
 
   const openButton = document.createElement('button');
   openButton.type = 'button';
-  openButton.textContent = '查看新版';
-  openButton.addEventListener('click', () => {
-    window.desktop.openExternal(release.url);
-    toast.classList.remove('visible');
+  openButton.textContent = '下载并安装';
+  openButton.addEventListener('click', async () => {
+    if (openButton.disabled) return;
+    openButton.disabled = true;
+    openButton.textContent = '正在下载 0%';
+    const result = await window.desktop.downloadAndInstallUpdate();
+    if (result?.error) {
+      openButton.disabled = false;
+      openButton.textContent = '重试下载';
+    }
   });
+  updateButton = openButton;
   toast.append(openButton);
   toast.classList.add('visible', 'update-available');
-  state.toastTimer = window.setTimeout(() => toast.classList.remove('visible'), 12000);
 }
 
 function captureEditorSnapshot() {
@@ -1122,6 +1129,11 @@ window.desktop.onOpenPath((document) => {
 });
 
 window.desktop.onUpdateAvailable(showUpdateNotice);
+window.desktop.onUpdateDownloadProgress(({ received, total }) => {
+  if (!updateButton?.isConnected) return;
+  const percent = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : null;
+  updateButton.textContent = percent == null ? '正在下载' : `正在下载 ${percent}%`;
+});
 
 setContent(initialContent);
 

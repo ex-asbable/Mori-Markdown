@@ -3,6 +3,28 @@ const https = require('node:https');
 const latestReleaseUrl = new URL('https://api.github.com/repos/ex-asbable/Mori-Markdown/releases/latest');
 const maximumResponseBytes = 64 * 1024;
 
+function getInstallerAsset(release, version) {
+  const name = `Mori-Markdown-Setup-${version}-x64.exe`;
+  const asset = Array.isArray(release.assets)
+    ? release.assets.find((candidate) => candidate?.name === name)
+    : null;
+  if (!asset || typeof asset.browser_download_url !== 'string' || !Number.isSafeInteger(asset.size) || asset.size <= 0) {
+    return null;
+  }
+
+  let downloadUrl;
+  try {
+    downloadUrl = new URL(asset.browser_download_url);
+  } catch {
+    return null;
+  }
+  const expectedPath = `/ex-asbable/Mori-Markdown/releases/download/v${version}/${name}`;
+  if (downloadUrl.protocol !== 'https:' || downloadUrl.hostname !== 'github.com' || downloadUrl.pathname !== expectedPath) {
+    return null;
+  }
+  return Object.freeze({ name, url: downloadUrl.href, size: asset.size });
+}
+
 function parseVersion(value) {
   if (typeof value !== 'string') return null;
   const match = value.trim().match(
@@ -64,10 +86,11 @@ function getAvailableUpdate(currentVersion, release) {
     return null;
   }
 
-  return Object.freeze({
-    version: tagName.trim().replace(/^v/i, ''),
-    url: releaseUrl.href
-  });
+  const version = tagName.trim().replace(/^v/i, '');
+  const installer = getInstallerAsset(release, version);
+  if (!installer) return null;
+
+  return Object.freeze({ version, installer });
 }
 
 function fetchLatestRelease({ currentVersion, timeoutMs = 5000, get = https.get }) {
@@ -117,5 +140,6 @@ function fetchLatestRelease({ currentVersion, timeoutMs = 5000, get = https.get 
 module.exports = {
   compareVersions,
   fetchLatestRelease,
-  getAvailableUpdate
+  getAvailableUpdate,
+  getInstallerAsset
 };
