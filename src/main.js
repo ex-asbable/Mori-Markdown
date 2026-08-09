@@ -1,11 +1,12 @@
 const { app, BrowserWindow, clipboard, dialog, ipcMain, shell } = require('electron');
 const fsSync = require('node:fs');
 const fs = require('node:fs/promises');
+const crypto = require('node:crypto');
 const https = require('node:https');
 const path = require('node:path');
 const { fileURLToPath, pathToFileURL } = require('node:url');
 const { buildStandaloneHtml } = require('./export-document');
-const { fetchLatestRelease } = require('./update-check');
+const { fetchLatestRelease, parseSha256Sums } = require('./update-check');
 
 let mainWindow;
 let isDirty = false;
@@ -14,6 +15,8 @@ let pendingDocumentPath = null;
 let lastOpenedDocumentPath = null;
 let rendererReady = false;
 let sessionWrite = Promise.resolve();
+let pendingSession = null;
+let sessionWriteTimer = null;
 let themePreferenceWrite = Promise.resolve();
 let isClosing = false;
 let updateCheck;
@@ -21,8 +24,13 @@ let availableUpdate = null;
 let updateDownload = null;
 let currentTheme = 'light';
 const isSmokeMode = process.argv.includes('--smoke');
+const updateDownloadHosts = new Set([
+  'github.com',
+  'objects.githubusercontent.com',
+  'release-assets.githubusercontent.com'
+]);
 
-function downloadInstaller(url, destination, expectedSize, onProgress, redirects = 0) {
+function downloadInstaller(url, destination, expectedSize, onProgress, expectedChecksum = null, redirects = 0) {
   return new Promise((resolve, reject) => {
     const request = https.get(url, {
       headers: { 'User-Agent': `Mori-Markdown/${app.getVersion()}` }
@@ -36,8 +44,17 @@ function downloadInstaller(url, destination, expectedSize, onProgress, redirects
         } catch {
           return reject(new Error('Invalid installer download redirect'));
         }
-        if (nextUrl.protocol !== 'https:') return reject(new Error('Installer redirect was not HTTPS'));
-        return resolve(downloadInstaller(nextUrl, destination, expectedSize, onProgress, redirects + 1));
+        if (nextUrl.protocol !== 'https:' || !updateDownloadHosts.has(nextUrl.hostname)) {
+          return reject(new Error('Installer redirect was not from a trusted host'));
+        }
+        return resolve(downloadInstaller(
+          nextUrl,
+          destination,
+          expectedSize,
+          onProgress,
+          expectedChecksum,
+          redirects + 1
+        ));
       }
       if (response.statusCode !== 200) {
         response.resume();
@@ -51,9 +68,15 @@ function downloadInstaller(url, destination, expectedSize, onProgress, redirects
       }
 
       let received = 0;
+      const hash = expectedChecksum ? crypto.createHash('sha256') : null;
       const output = fsSync.createWriteStream(destination, { flags: 'w' });
       response.on('data', (chunk) => {
         received += chunk.length;
+        if (received > expectedSize) {
+          response.destroy(new Error('Installer download exceeded the release asset size'));
+          return;
+        }
+        hash?.update(chunk);
         onProgress(received, expectedSize);
       });
       response.on('error', reject);
@@ -61,6 +84,10 @@ function downloadInstaller(url, destination, expectedSize, onProgress, redirects
       output.on('finish', () => {
         output.close(() => {
           if (received !== expectedSize) reject(new Error('Installer download size did not match the release asset'));
+          else if (expectedChecksum && !crypto.timingSafeEqual(
+            Buffer.from(hash.digest('hex'), 'utf8'),
+            Buffer.from(expectedChecksum, 'utf8')
+          )) reject(new Error('Installer checksum did not match the release manifest'));
           else resolve();
         });
       });
@@ -72,17 +99,29 @@ function downloadInstaller(url, destination, expectedSize, onProgress, redirects
 }
 
 async function downloadAndInstallUpdate() {
-  if (!availableUpdate?.installer) return { error: 'No update installer is available' };
+  if (!availableUpdate?.installer || !availableUpdate.checksums) return { error: 'No update installer is available' };
   if (updateDownload) return { error: 'Update download is already in progress' };
 
   const installerPath = path.join(app.getPath('temp'), availableUpdate.installer.name);
   const partialPath = `${installerPath}.part`;
+  const checksumsPath = `${installerPath}.sha256sums.part`;
   updateDownload = (async () => {
     await fs.unlink(partialPath).catch(() => {});
+    await fs.unlink(checksumsPath).catch(() => {});
+    await downloadInstaller(availableUpdate.checksums.url, checksumsPath, availableUpdate.checksums.size, () => {});
+    const expectedChecksum = parseSha256Sums(
+      await fs.readFile(checksumsPath, 'utf8'),
+      availableUpdate.installer.name
+    );
+    if (!expectedChecksum) throw new Error('Release checksum manifest did not contain the installer');
     await downloadInstaller(availableUpdate.installer.url, partialPath, availableUpdate.installer.size, (received, total) => {
       mainWindow?.webContents.send('app:update-download-progress', { received, total });
+    }, expectedChecksum);
+    await fs.unlink(installerPath).catch((error) => {
+      if (error.code !== 'ENOENT') throw error;
     });
     await fs.rename(partialPath, installerPath);
+    await fs.unlink(checksumsPath).catch(() => {});
     const launchError = await shell.openPath(installerPath);
     if (launchError) throw new Error(launchError);
     isQuitting = true;
@@ -94,6 +133,7 @@ async function downloadAndInstallUpdate() {
     return { installing: true };
   } catch (error) {
     await fs.unlink(partialPath).catch(() => {});
+    await fs.unlink(checksumsPath).catch(() => {});
     return { error: error.message };
   } finally {
     updateDownload = null;
@@ -156,15 +196,35 @@ async function loadSession() {
   }
 }
 
-function saveSession(session) {
-  if (isSmokeMode) return Promise.resolve();
+async function flushSessionWrite() {
+  if (sessionWriteTimer) {
+    clearTimeout(sessionWriteTimer);
+    sessionWriteTimer = null;
+  }
+  if (!pendingSession) return sessionWrite;
+
+  const session = pendingSession;
+  pendingSession = null;
   sessionWrite = sessionWrite.then(async () => {
     const sessionPath = getSessionPath();
     await fs.mkdir(path.dirname(sessionPath), { recursive: true });
-    const temporaryPath = `${sessionPath}.tmp`;
+    const temporaryPath = `${sessionPath}.${process.pid}.tmp`;
     await fs.writeFile(temporaryPath, JSON.stringify(session), 'utf8');
     await fs.rename(temporaryPath, sessionPath);
   }).catch((error) => console.error('Unable to save session:', error));
+  await sessionWrite;
+  return pendingSession ? flushSessionWrite() : sessionWrite;
+}
+
+function saveSession(session, { flush = false } = {}) {
+  if (isSmokeMode) return Promise.resolve();
+  pendingSession = session;
+  if (flush) return flushSessionWrite();
+  if (!sessionWriteTimer) {
+    sessionWriteTimer = setTimeout(() => {
+      flushSessionWrite().catch((error) => console.error('Unable to save session:', error));
+    }, 500);
+  }
   return sessionWrite;
 }
 
@@ -220,6 +280,20 @@ function getUntitledNamedFileName(fileName) {
   const extension = path.extname(trimmed);
   if (extension && extension.toLowerCase() !== '.md') throw new Error('未命名文档只能保存为 .md 文件。');
   return buildFileName(extension ? trimmed.slice(0, -extension.length) : trimmed, '.md');
+}
+
+async function writeDocumentAtomically(filePath, content) {
+  const directory = path.dirname(filePath);
+  const temporaryPath = path.join(
+    directory,
+    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`
+  );
+  try {
+    await fs.writeFile(temporaryPath, content, 'utf8');
+    await fs.rename(temporaryPath, filePath);
+  } finally {
+    await fs.unlink(temporaryPath).catch(() => {});
+  }
 }
 
 function resolveLocalResource(filePath, href) {
@@ -371,6 +445,10 @@ function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
+  });
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    event.preventDefault();
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
   });
 
   mainWindow.once('ready-to-show', async () => {
@@ -647,10 +725,12 @@ function createWindow() {
     isClosing = true;
     mainWindow.webContents.executeJavaScript('window.__moriGetSession?.()')
       .then((session) => {
-        const latestSessionWrite = session?.content != null ? saveSession(session) : sessionWrite;
+        const latestSessionWrite = session?.content != null
+          ? saveSession(session, { flush: true })
+          : flushSessionWrite();
         return Promise.all([latestSessionWrite, themePreferenceWrite]);
       })
-      .catch(() => Promise.all([sessionWrite, themePreferenceWrite]))
+      .catch(() => Promise.all([flushSessionWrite(), themePreferenceWrite]))
       .finally(() => {
         isQuitting = true;
         mainWindow?.close();
@@ -743,11 +823,11 @@ ipcMain.handle('document:save', async (_event, payload) => {
   }
 
   try {
-    await fs.writeFile(
-      filePath,
-      request.content,
-      exclusiveCreate ? { encoding: 'utf8', flag: 'wx' } : 'utf8'
-    );
+    if (exclusiveCreate) {
+      await fs.writeFile(filePath, request.content, { encoding: 'utf8', flag: 'wx' });
+    } else {
+      await writeDocumentAtomically(filePath, request.content);
+    }
     isDirty = false;
     return { canceled: false, filePath, name: path.basename(filePath) };
   } catch (error) {
@@ -848,8 +928,10 @@ ipcMain.handle('document:export-pdf', async (_event, payload) => {
     return { canceled: true, error: error.message };
   } finally {
     if (exportWindow && !exportWindow.isDestroyed()) exportWindow.destroy();
-    if (temporaryFile) await fs.unlink(temporaryFile).catch(() => {});
-    if (temporaryDirectory) await fs.rmdir(temporaryDirectory).catch(() => {});
+    if (temporaryDirectory) {
+      await fs.rm(temporaryDirectory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+        .catch(() => {});
+    }
   }
 });
 
@@ -909,7 +991,8 @@ ipcMain.handle('resource:embed', async (_event, { href, filePath }) => {
   if (!mimeType) return null;
   try {
     const stats = await fs.stat(resourcePath);
-    if (!stats.isFile()) return null;
+    // Keep export responsive and avoid unbounded base64 allocations from local files.
+    if (!stats.isFile() || stats.size > 20 * 1024 * 1024) return null;
     const content = await fs.readFile(resourcePath);
     return `data:${mimeType};base64,${content.toString('base64')}`;
   } catch {

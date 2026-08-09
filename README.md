@@ -39,8 +39,8 @@ npm.cmd run dist
 
 构建结果会生成在 `release` 目录：
 
-- `Mori-Markdown-Setup-0.3.2-x64.exe`：Windows 安装版
-- `Mori-Markdown-Portable-0.3.2-x64.exe`：无需安装的便携版
+- `Mori-Markdown-Setup-0.3.3-x64.exe`：Windows 安装版
+- `Mori-Markdown-Portable-0.3.3-x64.exe`：无需安装的便携版
 
 ## 快捷键
 

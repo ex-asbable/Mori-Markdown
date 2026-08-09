@@ -1,6 +1,8 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 
+const standaloneAssetsByRoot = new Map();
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll('&', '&amp;')
@@ -27,19 +29,32 @@ async function inlineKatexFonts(css, fontsDirectory) {
   });
 }
 
+function loadStandaloneAssets(appRoot) {
+  let assets = standaloneAssetsByRoot.get(appRoot);
+  if (!assets) {
+    assets = (async () => {
+      const [appCss, katexCssSource, highlightCss] = await Promise.all([
+        fs.readFile(path.join(appRoot, 'src', 'styles.css'), 'utf8'),
+        fs.readFile(path.join(appRoot, 'node_modules', 'katex', 'dist', 'katex.min.css'), 'utf8'),
+        fs.readFile(
+          path.join(appRoot, 'node_modules', '@highlightjs', 'cdn-assets', 'styles', 'github.min.css'),
+          'utf8'
+        )
+      ]);
+      const katexCss = await inlineKatexFonts(
+        katexCssSource,
+        path.join(appRoot, 'node_modules', 'katex', 'dist', 'fonts')
+      );
+      return { appCss, katexCss, highlightCss };
+    })();
+    standaloneAssetsByRoot.set(appRoot, assets);
+    assets.catch(() => standaloneAssetsByRoot.delete(appRoot));
+  }
+  return assets;
+}
+
 async function buildStandaloneHtml({ html, title }, appRoot) {
-  const [appCss, katexCssSource, highlightCss] = await Promise.all([
-    fs.readFile(path.join(appRoot, 'src', 'styles.css'), 'utf8'),
-    fs.readFile(path.join(appRoot, 'node_modules', 'katex', 'dist', 'katex.min.css'), 'utf8'),
-    fs.readFile(
-      path.join(appRoot, 'node_modules', '@highlightjs', 'cdn-assets', 'styles', 'github.min.css'),
-      'utf8'
-    )
-  ]);
-  const katexCss = await inlineKatexFonts(
-    katexCssSource,
-    path.join(appRoot, 'node_modules', 'katex', 'dist', 'fonts')
-  );
+  const { appCss, katexCss, highlightCss } = await loadStandaloneAssets(appRoot);
   const safeTitle = escapeHtml(title || 'Mori 文档');
 
   return `<!doctype html>
@@ -63,4 +78,4 @@ async function buildStandaloneHtml({ html, title }, appRoot) {
 </html>`;
 }
 
-module.exports = { buildStandaloneHtml, escapeHtml, inlineKatexFonts };
+module.exports = { buildStandaloneHtml, escapeHtml, inlineKatexFonts, loadStandaloneAssets };

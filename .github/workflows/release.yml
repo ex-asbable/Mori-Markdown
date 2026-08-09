@@ -50,6 +50,9 @@ jobs:
       - name: Run unit tests
         run: npm test
 
+      - name: Run Electron smoke test
+        run: npm run smoke
+
       - name: Build Windows executables
         run: npm run dist -- --publish never
 
@@ -70,7 +73,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: Mori-Markdown-${{ github.ref_name }}-windows-x64
+          name: Mori-Markdown-windows-x64
           path: |
             release/Mori-Markdown-Setup-*.exe
             release/Mori-Markdown-Portable-*.exe

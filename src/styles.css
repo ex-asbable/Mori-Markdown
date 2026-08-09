@@ -325,6 +325,47 @@ button {
   white-space: inherit;
 }
 
+/* Markdown source stays editable through the transparent textarea above it.
+ * Keep the palette restrained, but make structure scannable in both edit and
+ * split views. */
+.editor-highlight .hljs-section,
+.editor-highlight .hljs-title {
+  color: #315f8c;
+  font-weight: 700;
+}
+
+.editor-highlight .hljs-bullet,
+.editor-highlight .hljs-symbol {
+  color: #8a6630;
+}
+
+.editor-highlight .hljs-quote,
+.editor-highlight .hljs-comment,
+.editor-highlight .hljs-formula {
+  color: #7a817b;
+  font-style: italic;
+}
+
+.editor-highlight .hljs-string,
+.editor-highlight .hljs-link {
+  color: #2c745f;
+}
+
+.editor-highlight .hljs-code,
+.editor-highlight .hljs-doctag {
+  color: #9b543d;
+}
+
+.editor-highlight .hljs-strong {
+  color: #343431;
+  font-weight: 700;
+}
+
+.editor-highlight .hljs-emphasis {
+  color: #595a56;
+  font-style: italic;
+}
+
 .editor-pane.composing .editor-highlight {
   visibility: hidden;
 }
@@ -552,7 +593,7 @@ button {
   padding: 0.26em 0.56em;
   border: 1px solid var(--line-strong);
   border-radius: 5px;
-  background: var(--panel);
+  background: var(--paper);
   color: var(--muted);
   font: inherit;
   font-size: 0.75em;
@@ -575,6 +616,12 @@ button {
 .code-copy-button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+@media (hover: none) {
+  .code-copy-button {
+    opacity: 1;
+  }
 }
 
 .markdown-body table {
@@ -876,6 +923,40 @@ button {
 :root[data-theme="dark"] .editor-highlight,
 :root[data-theme="dark"] .markdown-body {
   color: #d8dad5;
+}
+
+:root[data-theme="dark"] .editor-highlight .hljs-section,
+:root[data-theme="dark"] .editor-highlight .hljs-title {
+  color: #91c4ed;
+}
+
+:root[data-theme="dark"] .editor-highlight .hljs-bullet,
+:root[data-theme="dark"] .editor-highlight .hljs-symbol {
+  color: #d7b879;
+}
+
+:root[data-theme="dark"] .editor-highlight .hljs-quote,
+:root[data-theme="dark"] .editor-highlight .hljs-comment,
+:root[data-theme="dark"] .editor-highlight .hljs-formula {
+  color: #a3aba4;
+}
+
+:root[data-theme="dark"] .editor-highlight .hljs-string,
+:root[data-theme="dark"] .editor-highlight .hljs-link {
+  color: #82c9ae;
+}
+
+:root[data-theme="dark"] .editor-highlight .hljs-code,
+:root[data-theme="dark"] .editor-highlight .hljs-doctag {
+  color: #e1a18b;
+}
+
+:root[data-theme="dark"] .editor-highlight .hljs-strong {
+  color: #ecece8;
+}
+
+:root[data-theme="dark"] .editor-highlight .hljs-emphasis {
+  color: #c8ccc7;
 }
 
 :root[data-theme="dark"] .editor-pane.composing #editor {

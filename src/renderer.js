@@ -65,9 +65,15 @@ const state = {
   scrollAnchors: [],
   renderTimer: null,
   highlightFrame: null,
+  statsFrame: null,
   scrollTimer: null,
   toastTimer: null,
-  sessionReady: false
+  sessionReady: false,
+  previewGeneration: 0,
+  resourceCache: new Map(),
+  mathCache: new Map(),
+  editorMirrorWidth: null,
+  editorMirrorWrap: null
 };
 
 function setTheme(theme, persist = true) {
@@ -258,16 +264,25 @@ function scheduleEditorHighlight() {
 }
 
 function renderMath(source, displayMode) {
+  const normalizedSource = source.trim();
+  const cacheKey = `${displayMode ? 'display' : 'inline'}\u0000${normalizedSource}`;
+  const cached = state.mathCache.get(cacheKey);
+  if (cached) return cached;
+
+  let rendered;
   try {
-    return katex.renderToString(source.trim(), {
+    rendered = katex.renderToString(normalizedSource, {
       displayMode,
       throwOnError: true,
       strict: false,
       trust: false
     });
   } catch (error) {
-    return `<span class="math-error" title="${escapeHtml(error.message)}">${escapeHtml(source)}</span>`;
+    rendered = `<span class="math-error" title="${escapeHtml(error.message)}">${escapeHtml(source)}</span>`;
   }
+  if (state.mathCache.size >= 200) state.mathCache.clear();
+  state.mathCache.set(cacheKey, rendered);
+  return rendered;
 }
 
 marked.use({
@@ -363,7 +378,7 @@ function renderPreviewWithAnchors(source) {
   preview.replaceChildren(fragment);
 }
 
-async function enhancePreviewResources() {
+async function enhancePreviewResources(generation, filePath) {
   preview.querySelectorAll('pre code').forEach((block) => {
     if (!window.hljs) return;
     const languageClass = Array.from(block.classList).find((name) => name.startsWith('language-'));
@@ -406,8 +421,14 @@ async function enhancePreviewResources() {
 
   const imageTasks = Array.from(preview.querySelectorAll('img[data-resource-src]')).map(async (image) => {
     const source = image.dataset.resourceSrc;
-    const resolved = await window.desktop.resolveResource({ href: source, filePath: state.filePath });
-    if (!image.isConnected || image.dataset.resourceSrc !== source) return;
+    const cacheKey = `${filePath || ''}\u0000${source}`;
+    let resource = state.resourceCache.get(cacheKey);
+    if (!resource) {
+      resource = window.desktop.resolveResource({ href: source, filePath });
+      state.resourceCache.set(cacheKey, resource);
+    }
+    const resolved = await resource;
+    if (generation !== state.previewGeneration || !image.isConnected || image.dataset.resourceSrc !== source) return;
     if (resolved) image.src = resolved;
     else image.removeAttribute('src');
   });
@@ -415,7 +436,7 @@ async function enhancePreviewResources() {
   preview.querySelectorAll('a[href]').forEach((link) => {
     link.addEventListener('click', async (event) => {
       const href = link.getAttribute('href');
-      if (/^https?:\/\//i.test(href)) {
+      if (/^(?:https?|mailto|tel):/i.test(href)) {
         event.preventDefault();
         window.desktop.openExternal(href);
         return;
@@ -434,6 +455,8 @@ async function enhancePreviewResources() {
 
 async function updatePreview() {
   const source = editor.value;
+  const generation = ++state.previewGeneration;
+  const filePath = state.filePath;
   if (!source.trim()) {
     preview.innerHTML = '<div class="empty-preview">开始书写，预览会出现在这里</div>';
     scheduleSharedScrollUpdate();
@@ -442,9 +465,9 @@ async function updatePreview() {
 
   renderPreviewWithAnchors(source);
 
-  await enhancePreviewResources();
+  await enhancePreviewResources(generation, filePath);
 
-  scheduleSharedScrollUpdate();
+  if (generation === state.previewGeneration) scheduleSharedScrollUpdate();
 }
 
 function schedulePreview() {
@@ -515,23 +538,28 @@ function getMasterScrollRange() {
 }
 
 function buildEditorMirror(sourceOffsets) {
-  const computed = window.getComputedStyle(editor);
-  editorMirror.style.width = `${editor.offsetWidth}px`;
-  editorMirror.style.boxSizing = computed.boxSizing;
-  editorMirror.style.padding = computed.padding;
-  editorMirror.style.fontFamily = computed.fontFamily;
-  editorMirror.style.fontSize = computed.fontSize;
-  editorMirror.style.fontWeight = computed.fontWeight;
-  editorMirror.style.fontStyle = computed.fontStyle;
-  editorMirror.style.fontVariant = computed.fontVariant;
-  editorMirror.style.fontStretch = computed.fontStretch;
-  editorMirror.style.lineHeight = computed.lineHeight;
-  editorMirror.style.letterSpacing = computed.letterSpacing;
-  editorMirror.style.wordSpacing = computed.wordSpacing;
-  editorMirror.style.tabSize = computed.tabSize;
-  editorMirror.style.whiteSpace = computed.whiteSpace;
-  editorMirror.style.overflowWrap = computed.overflowWrap;
-  editorMirror.style.wordBreak = computed.wordBreak;
+  const editorWidth = editor.offsetWidth;
+  if (state.editorMirrorWidth !== editorWidth || state.editorMirrorWrap !== state.wrap) {
+    const computed = window.getComputedStyle(editor);
+    editorMirror.style.width = `${editorWidth}px`;
+    editorMirror.style.boxSizing = computed.boxSizing;
+    editorMirror.style.padding = computed.padding;
+    editorMirror.style.fontFamily = computed.fontFamily;
+    editorMirror.style.fontSize = computed.fontSize;
+    editorMirror.style.fontWeight = computed.fontWeight;
+    editorMirror.style.fontStyle = computed.fontStyle;
+    editorMirror.style.fontVariant = computed.fontVariant;
+    editorMirror.style.fontStretch = computed.fontStretch;
+    editorMirror.style.lineHeight = computed.lineHeight;
+    editorMirror.style.letterSpacing = computed.letterSpacing;
+    editorMirror.style.wordSpacing = computed.wordSpacing;
+    editorMirror.style.tabSize = computed.tabSize;
+    editorMirror.style.whiteSpace = computed.whiteSpace;
+    editorMirror.style.overflowWrap = computed.overflowWrap;
+    editorMirror.style.wordBreak = computed.wordBreak;
+    state.editorMirrorWidth = editorWidth;
+    state.editorMirrorWrap = state.wrap;
+  }
   editorMirror.replaceChildren();
 
   const uniqueOffsets = [...new Set(sourceOffsets)].sort((left, right) => left - right);
@@ -686,6 +714,14 @@ function updateStats() {
   wordCount.textContent = `${cjk + words} 字`;
 }
 
+function scheduleStats() {
+  if (state.statsFrame !== null) return;
+  state.statsFrame = window.requestAnimationFrame(() => {
+    state.statsFrame = null;
+    updateStats();
+  });
+}
+
 function showToast(message) {
   window.clearTimeout(state.toastTimer);
   toast.classList.remove('update-available');
@@ -732,7 +768,7 @@ function refreshAfterEditorChange() {
   if (dirty !== state.dirty) setDirty(dirty);
   schedulePreview();
   scheduleEditorHighlight();
-  updateStats();
+  scheduleStats();
   updateEditorHeight();
   persistSession();
 }
@@ -763,6 +799,7 @@ function redo() {
 }
 
 function setContent(content, filePath = null, fileName = '未命名') {
+  if (state.filePath !== filePath) state.resourceCache.clear();
   editor.value = content;
   state.filePath = filePath;
   state.fileName = fileName;
@@ -863,6 +900,7 @@ async function prepareExportMarkup() {
   window.clearTimeout(state.renderTimer);
   await updatePreview();
   const exportedPreview = preview.cloneNode(true);
+  exportedPreview.querySelectorAll('.code-copy-button').forEach((button) => button.remove());
 
   const images = Array.from(exportedPreview.querySelectorAll('img[data-resource-src]'));
   await Promise.all(images.map(async (image) => {
@@ -876,7 +914,7 @@ async function prepareExportMarkup() {
   const links = Array.from(exportedPreview.querySelectorAll('a[href]'));
   await Promise.all(links.map(async (link) => {
     const href = link.getAttribute('href');
-    if (!href.startsWith('#') && !/^https?:\/\//i.test(href)) {
+    if (!href.startsWith('#') && !/^(?:[a-z][a-z\d+.-]*:)/i.test(href)) {
       const resolved = await window.desktop.resolveResource({ href, filePath: state.filePath });
       if (resolved) link.href = resolved;
     }
@@ -986,8 +1024,8 @@ editor.addEventListener('compositionend', () => {
   refreshAfterEditorChange();
 });
 
-editor.addEventListener('click', updateStats);
-editor.addEventListener('keyup', updateStats);
+editor.addEventListener('click', scheduleStats);
+editor.addEventListener('keyup', scheduleStats);
 editor.addEventListener('pointerdown', () => undoHistory.breakGroup());
 editor.addEventListener('blur', () => undoHistory.breakGroup());
 
@@ -998,6 +1036,13 @@ masterScrollbar.addEventListener('scroll', syncPanesFromMaster);
     'wheel',
     (event) => {
       if (state.mode !== 'split') return;
+      if (event.shiftKey || event.deltaX !== 0) {
+        if (pane === editorPane && editorPane.scrollWidth > editorPane.clientWidth) {
+          event.preventDefault();
+          editorPane.scrollLeft += event.deltaX || event.deltaY;
+        }
+        return;
+      }
       event.preventDefault();
       moveMasterScroll(event.deltaY);
     },
