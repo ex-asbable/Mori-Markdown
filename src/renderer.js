@@ -376,6 +376,33 @@ async function enhancePreviewResources() {
     }
   });
 
+  preview.querySelectorAll('pre').forEach((codeBlock) => {
+    const copyButton = document.createElement('button');
+    copyButton.type = 'button';
+    copyButton.className = 'code-copy-button';
+    copyButton.textContent = '复制';
+    copyButton.setAttribute('aria-label', '复制代码');
+    copyButton.title = '复制代码';
+    copyButton.addEventListener('click', async () => {
+      const code = codeBlock.querySelector('code');
+      if (!code) return;
+
+      try {
+        await window.desktop.writeClipboardText(code.textContent);
+        copyButton.textContent = '已复制';
+        copyButton.disabled = true;
+        window.setTimeout(() => {
+          if (!copyButton.isConnected) return;
+          copyButton.textContent = '复制';
+          copyButton.disabled = false;
+        }, 1400);
+      } catch {
+        showToast('复制失败');
+      }
+    });
+    codeBlock.append(copyButton);
+  });
+
   const imageTasks = Array.from(preview.querySelectorAll('img[data-resource-src]')).map(async (image) => {
     const source = image.dataset.resourceSrc;
     const resolved = await window.desktop.resolveResource({ href: source, filePath: state.filePath });

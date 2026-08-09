@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('desktop', {
   setTheme: (theme) => ipcRenderer.send('app:set-theme', theme),
   loadSession: () => ipcRenderer.invoke('session:load'),
   saveSession: (session) => ipcRenderer.send('session:save', session),
+  writeClipboardText: (text) => ipcRenderer.invoke('clipboard:write-text', text),
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
   resolveResource: (payload) => ipcRenderer.invoke('resource:resolve', payload),
   embedResource: (payload) => ipcRenderer.invoke('resource:embed', payload),

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, shell } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { fileURLToPath, pathToFileURL } = require('node:url');
@@ -778,6 +778,12 @@ ipcMain.on('app:set-theme', (_event, theme) => {
   if (theme !== 'light' && theme !== 'dark') return;
   applyWindowTheme(theme);
   saveThemePreference(theme);
+});
+
+ipcMain.handle('clipboard:write-text', (_event, value) => {
+  if (typeof value !== 'string') return false;
+  clipboard.writeText(value);
+  return true;
 });
 
 ipcMain.handle('session:load', () => {
